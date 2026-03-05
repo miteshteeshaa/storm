@@ -116,22 +116,21 @@ const clearCmd = {
     );
 
     // Send ephemeral reply with the select menu
-    await interaction.reply({
+    const reply = await interaction.reply({
       embeds: [{ color: 0xFF6600, description: '⚠️ **Select what to clear:**' }],
       components: [row],
       ephemeral: true,
       fetchReply: true,
     });
 
-    // Collect the selection directly from the interaction (works with ephemeral)
+    // Collect from the reply message — works correctly with ephemeral interactions
     let choice;
     try {
-      const sel = await interaction.awaitMessageComponent({
+      const sel = await reply.awaitMessageComponent({
         filter: x => x.customId === 'clear_select' && x.user.id === interaction.user.id,
         time: 60_000,
       });
       choice = sel.values[0];
-      // Acknowledge the component interaction immediately
       await sel.deferUpdate();
     } catch {
       return interaction.editReply({ embeds: [errorEmbed('Timed Out', 'No selection made.')], components: [] });
@@ -157,7 +156,7 @@ const clearCmd = {
     }
 
     // ── Helper: strip roles from a list of teams ──────────────────────────────
-    const roleIds = [config.slot_role, config.waitlist_role, config.registered_role, config.idpass_role].filter(Boolean);
+    const roleIds = [config.slot_role, config.waitlist_role, config.registered_role].filter(Boolean);
     async function stripRoles(teams) {
       for (const team of teams) {
         const ids = new Set([team.captain_id, team.manager_id, ...(team.players || [])].filter(Boolean));
