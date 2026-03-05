@@ -57,7 +57,7 @@ const sheetCmd = {
     await interaction.deferReply({ ephemeral: true });
     const data = getRegistrations(interaction.guildId);
     try {
-      await writeRegistrationSheet(extractSheetId(config.sheet_url), data.slots);
+      await writeRegistrationSheet(extractSheetId(config.sheet_url), data.slots, interaction.client);
       return interaction.editReply({ embeds: [successEmbed('Sheet Updated', `Pushed **${data.slots.length}** teams.`)] });
     } catch (e) {
       return interaction.editReply({ embeds: [errorEmbed('Sheet Error', e.message)] });
@@ -101,7 +101,7 @@ const clearCmd = {
     const data     = getRegistrations(interaction.guildId);
     const allTeams = [...data.slots, ...data.waitlist];
 
-    // ── Strip roles from all registered members ───────────────────────────────
+    // ── Collect all role IDs to strip ─────────────────────────────────────────
     const roleIds = [
       config.slot_role,
       config.waitlist_role,
@@ -109,21 +109,21 @@ const clearCmd = {
       config.idpass_role,
     ].filter(Boolean);
 
+    // FIX: Strip roles from ALL players (captain + all tagged players), not just captain
     for (const team of allTeams) {
-      // Strip from captain
-      try {
-        const member = await interaction.guild.members.fetch(team.captain_id);
-        for (const roleId of roleIds) await member.roles.remove(roleId).catch(() => {});
-      } catch {}
+      // Collect every player ID on the team
+      const playerIds = new Set();
+      if (team.captain_id) playerIds.add(team.captain_id);
+      if (team.manager_id) playerIds.add(team.manager_id);
+      if (team.players)    team.players.forEach(id => playerIds.add(id));
 
-      // Strip from all tagged players too
-      if (team.players) {
-        for (const playerId of team.players) {
-          try {
-            const member = await interaction.guild.members.fetch(playerId);
-            for (const roleId of roleIds) await member.roles.remove(roleId).catch(() => {});
-          } catch {}
-        }
+      for (const playerId of playerIds) {
+        try {
+          const member = await interaction.guild.members.fetch(playerId);
+          for (const roleId of roleIds) {
+            await member.roles.remove(roleId).catch(() => {});
+          }
+        } catch {} // Member may have left the server
       }
     }
 
@@ -133,20 +133,48 @@ const clearCmd = {
     setServer(interaction.guildId, { registration_open: false });
 
     // ── Reset the persistent slot list embed (do NOT delete it) ──────────────
-    // Shows empty numbered slots so it's ready for next scrim
     const channelId  = config.idpass_channel || config.slotlist_channel;
-    const existingId = getPersistentSlotListId(interaction.guildId);
+    const ids        = getPersistentSlotListId(interaction.guildId);
+    const existingId = ids.overall;
 
     if (channelId && existingId) {
       try {
         const ch  = await interaction.guild.channels.fetch(channelId);
         const msg = await ch.messages.fetch(existingId);
-        // Pass empty slots array — will show all slot numbers empty
         await msg.edit({ embeds: [buildPersistentSlotList([], settings)] });
       } catch {
-        // Message was deleted — clear the stored ID so next /register posts fresh
-        setPersistentSlotListId(interaction.guildId, null);
+        setPersistentSlotListId(interaction.guildId, { overall: null });
       }
+    }
+
+    // ── Bulk-delete messages in registration, slot allocation & waitlist channels
+    // Discord only allows bulk delete for messages < 14 days old
+    const channelsToClear = [
+      config.register_channel,
+      config.slotlist_channel,
+      config.waitlist_channel,
+    ].filter(Boolean);
+
+    let clearedChannels = 0;
+    for (const chId of channelsToClear) {
+      try {
+        const ch = await interaction.guild.channels.fetch(chId);
+        if (!ch) continue;
+
+        // Fetch up to 100 messages and bulk delete (Discord limit per call)
+        // Loop until no more messages or they're too old
+        let deleted = 0;
+        while (true) {
+          const messages = await ch.messages.fetch({ limit: 100 });
+          // Filter out messages older than 14 days (Discord won't bulk delete them)
+          const deletable = messages.filter(m => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
+          if (deletable.size === 0) break;
+          await ch.bulkDelete(deletable, true).catch(() => {});
+          deleted += deletable.size;
+          if (deletable.size < 100) break; // No more messages to delete
+        }
+        clearedChannels++;
+      } catch {} // Channel may not exist or bot lacks permissions
     }
 
     return interaction.editReply({
@@ -154,7 +182,8 @@ const clearCmd = {
         'Registration Cleared',
         `All **${allTeams.length}** teams removed.\n` +
         `Roles stripped from all players.\n` +
-        `Slot list reset to empty — ready for next scrim!\n\n` +
+        `Slot list reset — ready for next scrim!\n` +
+        `**${clearedChannels}** channel(s) cleared.\n\n` +
         `Run \`/open\` to start a new registration.`
       )]
     });
