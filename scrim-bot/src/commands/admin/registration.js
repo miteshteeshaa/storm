@@ -1,144 +1,173 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { getServer, setServer, getConfig, getRegistrations } = require('../../utils/database');
+const { getServer, setServer, getConfig, getRegistrations, getScrimSettings } = require('../../utils/database');
 const { errorEmbed, successEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
-const { registerConfirmSession, buildSlotListEmbed } = require('../../handlers/reactionHandler');
+const {
+  registerConfirmSession,
+  buildConfirmSlotList,
+  buildPersistentSlotList,
+  getPersistentSlotListId,
+} = require('../../handlers/reactionHandler');
 
-const openData = new SlashCommandBuilder()
-  .setName('open')
-  .setDescription('Open team registration (Admin only)')
-  .addIntegerOption(opt =>
-    opt.setName('slots')
-      .setDescription('Max number of slots (default: from config)')
-      .setMinValue(1)
-      .setMaxValue(500)
-  );
+// ── /open ─────────────────────────────────────────────────────────────────────
+const openCmd = {
+  data: new SlashCommandBuilder()
+    .setName('open')
+    .setDescription('Open team registration (Admin only)')
+    .addIntegerOption(opt =>
+      opt.setName('slots').setDescription('Override max slots').setMinValue(1).setMaxValue(500)
+    ),
 
-const closeData = new SlashCommandBuilder()
-  .setName('close')
-  .setDescription('Close registration and post CONFIRM YOUR SLOTS (Admin only)');
+  async execute(interaction) {
+    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
+    if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-async function executeOpen(interaction) {
-  if (!isActivated(interaction.guildId)) {
-    return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
+    const config   = getConfig(interaction.guildId);
+    const settings = getScrimSettings(interaction.guildId);
+    const maxSlots = interaction.options.getInteger('slots') || settings.slots;
+
+    setServer(interaction.guildId, { registration_open: true, max_slots: maxSlots, opened_at: new Date().toISOString() });
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00FF7F)
+      .setTitle(`🎮 ${settings.scrim_name} — REGISTRATION OPEN!`)
+      .setDescription('Use `/register` to register your team!')
+      .addFields(
+        { name: '📋 Total Slots', value: `\`${maxSlots}\``, inline: true },
+        { name: '🔢 Starting From', value: `Slot \`${settings.first_slot}\``, inline: true },
+        { name: '🏟️ Lobbies', value: `\`${settings.lobbies}\``, inline: true },
+        { name: '📌 Command', value: '`/register team_name: team_tag: manager: [players...]`', inline: false },
+      )
+      .setFooter({ text: 'First come, first served! Overflow goes to waitlist.' })
+      .setTimestamp();
+
+    if (config.register_channel) {
+      try {
+        const ch = await interaction.guild.channels.fetch(config.register_channel);
+        if (ch) await ch.send({ embeds: [embed] });
+      } catch {}
+    }
+
+    await interaction.reply({ embeds: [successEmbed('Registration Opened', `Open with **${maxSlots}** slots starting from slot **${settings.first_slot}**!`)], ephemeral: true });
   }
-  if (!await isAdmin(interaction)) {
-    return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+};
+
+// ── /close ────────────────────────────────────────────────────────────────────
+const closeCmd = {
+  data: new SlashCommandBuilder()
+    .setName('close')
+    .setDescription('Close registration (Admin only)'),
+
+  async execute(interaction) {
+    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
+    if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+
+    setServer(interaction.guildId, { registration_open: false });
+
+    const config = getConfig(interaction.guildId);
+    const data   = getRegistrations(interaction.guildId);
+
+    // Post CLOSED notice
+    if (config.register_channel) {
+      try {
+        const ch = await interaction.guild.channels.fetch(config.register_channel);
+        if (ch) {
+          await ch.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0xFF4444)
+                .setTitle('🔒 REGISTRATION CLOSED')
+                .setDescription('Registration is now closed. No more teams can register.\n\nAdmin will post **CONFIRM YOUR SLOTS** soon.')
+                .setTimestamp()
+            ]
+          });
+        }
+      } catch {}
+    }
+
+    await interaction.reply({
+      embeds: [successEmbed('Registration Closed', `**${data.slots.length}** teams registered.\nRun \`/confirm\` when ready to post slot confirmation.`)],
+      ephemeral: true,
+    });
   }
+};
 
-  const config   = getConfig(interaction.guildId);
-  const maxSlots = interaction.options.getInteger('slots') || config.max_slots || 100;
+// ── /confirm ──────────────────────────────────────────────────────────────────
+const confirmCmd = {
+  data: new SlashCommandBuilder()
+    .setName('confirm')
+    .setDescription('Post CONFIRM YOUR SLOTS message for teams to react (Admin only)'),
 
-  setServer(interaction.guildId, {
-    registration_open: true,
-    max_slots: maxSlots,
-    opened_at: new Date().toISOString(),
-  });
+  async execute(interaction) {
+    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
+    if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-  const embed = new EmbedBuilder()
-    .setColor(0x00FF7F)
-    .setTitle('🎮 SCRIM REGISTRATION IS NOW OPEN!')
-    .setDescription('Use `/register` to register your team!\n\n**Required info:**\n> `team_name` — Full team name\n> `team_tag` — Short tag e.g. ZRX\n> `manager` — Tag your captain/manager')
-    .addFields(
-      { name: '📋 Available Slots', value: `\`${maxSlots}\``, inline: true },
-      { name: '📌 Command', value: '`/register`', inline: true },
-    )
-    .setFooter({ text: 'First come, first served! Overflow goes to waitlist.' })
-    .setTimestamp();
+    const config   = getConfig(interaction.guildId);
+    const settings = getScrimSettings(interaction.guildId);
+    const data     = getRegistrations(interaction.guildId);
 
-  if (config.register_channel) {
+    if (data.slots.length === 0) {
+      return interaction.reply({ embeds: [errorEmbed('No Teams', 'No registered teams found.')], ephemeral: true });
+    }
+
+    const channelId = config.slotlist_channel;
+    if (!channelId) {
+      return interaction.reply({ embeds: [errorEmbed('No Channel', 'Set a Slot List channel in `/config` first.')], ephemeral: true });
+    }
+
     try {
-      const ch = await interaction.guild.channels.fetch(config.register_channel);
-      if (ch) await ch.send({ embeds: [embed] });
-    } catch {}
-  }
+      const ch = await interaction.guild.channels.fetch(channelId);
 
-  await interaction.reply({
-    embeds: [successEmbed('Registration Opened', `Registration is now open with **${maxSlots}** slots!`)],
-    ephemeral: true,
-  });
-}
+      // 1. Post the slot list (will update live)
+      const slotListMsg = await ch.send({
+        embeds: [buildConfirmSlotList(data.slots, settings)]
+      });
 
-async function executeClose(interaction) {
-  if (!isActivated(interaction.guildId)) {
-    return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
-  }
-  if (!await isAdmin(interaction)) {
-    return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
-  }
+      // 2. Post CONFIRM YOUR SLOTS
+      const confirmMsg = await ch.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('✅ CONFIRM YOUR SLOTS')
+            .setDescription(
+              'React below to confirm or cancel your slot:\n\n' +
+              '✅ — Confirms your slot (__underlined__ in the list above)\n' +
+              '❌ — Cancels your slot (~~crossed out~~ in the list above)\n\n' +
+              '*Only your team manager/captain can react.*'
+            )
+            .setFooter({ text: `${settings.scrim_name} | Slot confirmation` })
+        ]
+      });
 
-  setServer(interaction.guildId, { registration_open: false });
+      await confirmMsg.react('✅');
+      await confirmMsg.react('❌');
 
-  const config   = getConfig(interaction.guildId);
-  const data     = getRegistrations(interaction.guildId);
-  const maxSlots = config.max_slots || 100;
+      // 3. Register the reaction session
+      registerConfirmSession(interaction.guildId, confirmMsg.id, ch.id, slotListMsg.id);
 
-  // Post CLOSED notice in registration channel
-  if (config.register_channel) {
-    try {
-      const ch = await interaction.guild.channels.fetch(config.register_channel);
-      if (ch) {
-        await ch.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xFF4444)
-              .setTitle('🔒 REGISTRATION CLOSED')
-              .setDescription('Registration has been closed. No more teams can register.')
-              .setTimestamp()
-          ]
-        });
+      // 4. Also update the persistent list in idpass channel
+      const idpassChannelId = config.idpass_channel;
+      if (idpassChannelId) {
+        try {
+          const idCh = await interaction.guild.channels.fetch(idpassChannelId);
+          const existingId = getPersistentSlotListId(interaction.guildId);
+          if (existingId) {
+            const existing = await idCh.messages.fetch(existingId).catch(() => null);
+            if (existing) await existing.edit({ embeds: [buildPersistentSlotList(data.slots, settings)] });
+          }
+        } catch {}
       }
-    } catch {}
-  }
 
-  // Post slot list + CONFIRM YOUR SLOTS in slotlist channel
-  if (config.slotlist_channel && data.slots.length > 0) {
-    try {
-      const ch = await interaction.guild.channels.fetch(config.slotlist_channel);
-      if (ch) {
-        // 1. Post the numbered slot list — edited live as teams react
-        const slotListMsg = await ch.send({
-          embeds: [buildSlotListEmbed(data.slots, maxSlots)]
-        });
+      await interaction.reply({
+        embeds: [successEmbed('Confirm Posted!', `Slot confirmation message posted in <#${channelId}>.\nTeams can now react to confirm/cancel their slot.`)],
+        ephemeral: true,
+      });
 
-        // 2. Post CONFIRM YOUR SLOTS
-        const confirmMsg = await ch.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x5865F2)
-              .setTitle('✅ CONFIRM YOUR SLOTS')
-              .setDescription(
-                'React below to confirm or cancel your slot:\n\n' +
-                '✅ — Confirms your slot (__underlined__ in the list above)\n' +
-                '❌ — Cancels your slot (~~crossed out~~ in the list above)'
-              )
-              .setFooter({ text: 'Only registered team managers/captains can react.' })
-          ]
-        });
-
-        await confirmMsg.react('✅');
-        await confirmMsg.react('❌');
-
-        // 3. Register the session
-        registerConfirmSession(
-          interaction.guildId,
-          confirmMsg.id,
-          ch.id,
-          slotListMsg.id
-        );
-      }
     } catch (err) {
-      console.error('❌ Error posting confirm message:', err.message);
+      console.error('❌ /confirm error:', err.message);
+      await interaction.reply({ embeds: [errorEmbed('Error', err.message)], ephemeral: true });
     }
   }
+};
 
-  await interaction.reply({
-    embeds: [successEmbed('Registration Closed', `**${data.slots.length}** teams registered. Confirm Your Slots posted!`)],
-    ephemeral: true,
-  });
-}
-
-module.exports = [
-  { data: openData,  execute: executeOpen  },
-  { data: closeData, execute: executeClose },
-];
+module.exports = [openCmd, closeCmd, confirmCmd];
