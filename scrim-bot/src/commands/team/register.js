@@ -5,12 +5,7 @@ const {
 const { errorEmbed } = require('../../utils/embeds');
 const { isActivated, isRegistrationOpen } = require('../../utils/permissions');
 const { writeRegistrationSheet, extractSheetId } = require('../../utils/sheets');
-const {
-  buildPersistentSlotList,
-  getPersistentSlotListId,
-  setPersistentSlotListId,
-  registerTeamCard,
-} = require('../../handlers/reactionHandler');
+const { registerTeamCard } = require('../../handlers/reactionHandler');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -125,7 +120,7 @@ module.exports = {
               .setColor(0x5865F2)
               .setTitle(`[${teamTag}] ${teamName}`)
               .setDescription(playerMentions)
-              .setFooter({ text: `Queue #${queueNum} — React with lobby letter to assign` })
+              .setFooter({ text: `#${queueNum}` })
               .setTimestamp();
 
             const msg = await ch.send({ embeds: [card] });
@@ -137,7 +132,6 @@ module.exports = {
             for (const e of lobbyEmojis) {
               try { await msg.react(e); } catch {}
             }
-            // ❌ = unassign slot (always present)
             try { await msg.react('❌'); } catch {}
           }
         } catch (err) {
@@ -145,8 +139,6 @@ module.exports = {
         }
       }
 
-      // ── Update persistent overall slot list ───────────────────────────────
-      await updatePersistentSlotList(interaction, config, settings, data);
 
       // ── Private reply to registrant ───────────────────────────────────────
       const playerMentions = players.map(p => `<@${p.id}>`).join(', ');
@@ -172,38 +164,3 @@ module.exports = {
     }
   }
 };
-
-async function updatePersistentSlotList(interaction, config, settings, data) {
-  const channelId = config.idpass_channel;
-  if (!channelId) return;
-  try {
-    const ch    = await interaction.guild.channels.fetch(channelId);
-    if (!ch) return;
-    const embed = buildPersistentSlotList(data.slots, settings);
-    const ids   = getPersistentSlotListId(interaction.guildId);
-
-    if (ids.overall) {
-      try {
-        const existing = await ch.messages.fetch(ids.overall);
-        await existing.edit({ embeds: [embed] });
-        return;
-      } catch {}
-    }
-
-    const msgs     = await ch.messages.fetch({ limit: 50 });
-    const existing = msgs.find(m =>
-      m.author.id === interaction.client.user.id &&
-      m.embeds[0]?.title?.includes('SLOT LIST')
-    );
-    if (existing) {
-      setPersistentSlotListId(interaction.guildId, { overall: existing.id });
-      await existing.edit({ embeds: [embed] });
-    } else {
-      const newMsg = await ch.send({ embeds: [embed] });
-      setPersistentSlotListId(interaction.guildId, { overall: newMsg.id });
-      try { await newMsg.pin(); } catch {}
-    }
-  } catch (err) {
-    console.error('⚠️ Persistent slot list error:', err.message);
-  }
-}
