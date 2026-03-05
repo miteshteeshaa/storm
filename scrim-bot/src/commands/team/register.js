@@ -9,6 +9,7 @@ const {
   buildPersistentSlotList,
   getPersistentSlotListId,
   setPersistentSlotListId,
+  registerTeamCard,
 } = require('../../handlers/reactionHandler');
 
 module.exports = {
@@ -22,21 +23,12 @@ module.exports = {
       opt.setName('team_tag').setDescription('Short tag e.g. ZRX').setRequired(true).setMaxLength(8)
     )
     .addUserOption(opt =>
-      opt.setName('manager').setDescription('Team manager/captain mention').setRequired(true)
+      opt.setName('manager').setDescription('Team manager/captain').setRequired(true)
     )
-    // Up to 4 teammates for idpass role
-    .addUserOption(opt =>
-      opt.setName('player2').setDescription('Player 2 (gets ID/Pass role)').setRequired(false)
-    )
-    .addUserOption(opt =>
-      opt.setName('player3').setDescription('Player 3 (gets ID/Pass role)').setRequired(false)
-    )
-    .addUserOption(opt =>
-      opt.setName('player4').setDescription('Player 4 (gets ID/Pass role)').setRequired(false)
-    )
-    .addUserOption(opt =>
-      opt.setName('player5').setDescription('Player 5 (gets ID/Pass role)').setRequired(false)
-    ),
+    .addUserOption(opt => opt.setName('player2').setDescription('Player 2 (gets ID/Pass role)').setRequired(false))
+    .addUserOption(opt => opt.setName('player3').setDescription('Player 3 (gets ID/Pass role)').setRequired(false))
+    .addUserOption(opt => opt.setName('player4').setDescription('Player 4 (gets ID/Pass role)').setRequired(false))
+    .addUserOption(opt => opt.setName('player5').setDescription('Player 5 (gets ID/Pass role)').setRequired(false)),
 
   async execute(interaction) {
     await interaction.deferReply({ ephemeral: true });
@@ -52,7 +44,6 @@ module.exports = {
       const config   = getConfig(interaction.guildId);
       const settings = getScrimSettings(interaction.guildId);
       const data     = getRegistrations(interaction.guildId);
-      const maxSlots = settings.slots;
 
       const teamName  = interaction.options.getString('team_name');
       const teamTag   = interaction.options.getString('team_tag').toUpperCase();
@@ -66,7 +57,7 @@ module.exports = {
         if (p && !players.find(x => x.id === p.id)) players.push(p);
       }
 
-      // ── Duplicate check: same team_tag only (allow unlimited registrations) ──
+      // ── Duplicate checks ──────────────────────────────────────────────────
       const allTeams = [...data.slots, ...data.waitlist];
       if (allTeams.find(t => t.team_tag.toLowerCase() === teamTag.toLowerCase())) {
         return interaction.editReply({ embeds: [errorEmbed('Tag Taken', `**[${teamTag}]** is already registered.`)] });
@@ -75,19 +66,19 @@ module.exports = {
         return interaction.editReply({ embeds: [errorEmbed('Name Taken', `**${teamName}** is already registered.`)] });
       }
 
-      // ── Slot or waitlist ──────────────────────────────────────────────────
-      const isWaitlist = data.slots.length >= maxSlots;
-      const slotNumber = isWaitlist ? data.waitlist.length + 1 : data.slots.length + 1;
-      const globalSlot = isWaitlist ? null : (settings.first_slot + data.slots.length);
+      // ── Add to queue (NO auto slot assignment) ────────────────────────────
+      const isWaitlist = data.slots.length >= settings.slots;
+      const queueNum   = isWaitlist ? data.waitlist.length + 1 : data.slots.length + 1;
 
       const team = {
-        team_name:    teamName,
-        team_tag:     teamTag,
-        captain_id:   captainId,
-        manager_id:   manager.id,
-        players:      players.map(p => p.id),
-        timestamp:    new Date().toISOString(),
-        lobby:        null,
+        team_name:  teamName,
+        team_tag:   teamTag,
+        captain_id: captainId,
+        manager_id: manager.id,
+        players:    players.map(p => p.id),
+        timestamp:  new Date().toISOString(),
+        lobby:      null,      // assigned by admin reaction
+        lobby_slot: null,      // assigned by admin reaction
       };
 
       if (!isWaitlist) {
@@ -95,19 +86,15 @@ module.exports = {
       } else {
         data.waitlist.push(team);
       }
-
       setRegistrations(interaction.guildId, data);
 
       // ── Roles ─────────────────────────────────────────────────────────────
       try {
         const member = interaction.member;
         if (config.registered_role) await member.roles.add(config.registered_role).catch(() => {});
-
         if (!isWaitlist) {
           if (config.slot_role)     await member.roles.add(config.slot_role).catch(() => {});
           if (config.waitlist_role) await member.roles.remove(config.waitlist_role).catch(() => {});
-
-          // Give idpass role to all tagged players
           if (config.idpass_role) {
             for (const player of players) {
               try {
@@ -130,20 +117,34 @@ module.exports = {
       }
 
       // ── Post team card in slot-allocation channel ──────────────────────────
+      // Admin will react on this card to assign lobby + slot number
       if (config.slotlist_channel) {
         try {
           const ch = await interaction.guild.channels.fetch(config.slotlist_channel);
           if (ch) {
             const playerMentions = players.map(p => `<@${p.id}>`).join(' ');
+            const teamIndex = data.slots.length - 1; // index in slots array
+
             const card = new EmbedBuilder()
               .setColor(isWaitlist ? 0xFFAA00 : 0x5865F2)
               .setDescription(`**[${teamTag}] ${teamName}** ${playerMentions}`)
-              .setFooter({ text: isWaitlist ? `Waitlist #${slotNumber}` : `Slot #${globalSlot}` })
+              .setFooter({ text: isWaitlist ? `Waitlist #${queueNum} — waiting for slot` : `Queue #${queueNum} — waiting for admin to assign slot` })
               .setTimestamp();
 
             const msg = await ch.send({ embeds: [card] });
-            for (const emoji of ['✅', '❌', '🅰️', '🅱️', '🇨', '🇩', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣']) {
-              try { await msg.react(emoji); } catch {}
+
+            // Register this message so reaction handler knows which team it belongs to
+            if (!isWaitlist) {
+              registerTeamCard(msg.id, interaction.guildId, teamIndex);
+            }
+
+            // Add lobby letter reactions (A B C D...) + slot number reactions (1-10)
+            const numLobbies = settings.lobbies || 4;
+            const lobbyEmojis = ['🅰️', '🅱️', '🇨', '🇩', '🇪', '🇫'].slice(0, numLobbies);
+            const numEmojis   = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
+
+            for (const e of [...lobbyEmojis, ...numEmojis]) {
+              try { await msg.react(e); } catch {}
             }
           }
         } catch (err) {
@@ -151,22 +152,23 @@ module.exports = {
         }
       }
 
-      // ── Update persistent slot list in idpass channel ──────────────────────
+      // ── Update persistent slot list (unassigned section) ──────────────────
       await updatePersistentSlotList(interaction, config, settings, data);
 
-      // ── Reply ──────────────────────────────────────────────────────────────
+      // ── Reply to user ─────────────────────────────────────────────────────
       const playerMentions = players.map(p => `<@${p.id}>`).join(', ');
       return interaction.editReply({
         embeds: [
           new EmbedBuilder()
             .setColor(isWaitlist ? 0xFFAA00 : 0x00FF7F)
-            .setTitle(isWaitlist ? '⏳ Added to Waitlist' : '✅ Slot Confirmed!')
+            .setTitle(isWaitlist ? '⏳ Added to Waitlist' : '✅ Registered!')
+            .setDescription('Your team card has been posted. **Admin will assign your lobby and slot.**')
             .addFields(
               { name: '🏷️ Team', value: `[${teamTag}] ${teamName}`, inline: true },
-              { name: isWaitlist ? '📋 Waitlist #' : '🎯 Slot #', value: `${isWaitlist ? slotNumber : globalSlot}`, inline: true },
-              { name: '👥 Players (got ID/Pass)', value: playerMentions },
+              { name: '📋 Queue #', value: `${queueNum}`, inline: true },
+              { name: '👥 Players (ID/Pass)', value: playerMentions },
             )
-            .setFooter({ text: isWaitlist ? 'You will be notified if a slot opens.' : 'Good luck!' })
+            .setFooter({ text: 'Wait for admin to assign your lobby & slot number.' })
             .setTimestamp()
         ]
       });
@@ -178,7 +180,7 @@ module.exports = {
   }
 };
 
-// ── Create or update the always-visible slot list in idpass channel ────────────
+// ── Create or update persistent slot list ─────────────────────────────────────
 async function updatePersistentSlotList(interaction, config, settings, data) {
   const channelId = config.idpass_channel || config.slotlist_channel;
   if (!channelId) return;
@@ -186,10 +188,8 @@ async function updatePersistentSlotList(interaction, config, settings, data) {
   try {
     const ch    = await interaction.guild.channels.fetch(channelId);
     if (!ch) return;
-
     const embed = buildPersistentSlotList(data.slots, settings);
 
-    // Try to edit existing message
     const existingId = getPersistentSlotListId(interaction.guildId);
     if (existingId) {
       try {
@@ -199,7 +199,6 @@ async function updatePersistentSlotList(interaction, config, settings, data) {
       } catch {}
     }
 
-    // Search for existing pinned slot list
     const msgs     = await ch.messages.fetch({ limit: 50 });
     const existing = msgs.find(m =>
       m.author.id === interaction.client.user.id &&
@@ -215,6 +214,6 @@ async function updatePersistentSlotList(interaction, config, settings, data) {
       try { await newMsg.pin(); } catch {}
     }
   } catch (err) {
-    console.error('⚠️ Could not update persistent slot list:', err.message);
+    console.error('⚠️ Persistent slot list error:', err.message);
   }
 }
