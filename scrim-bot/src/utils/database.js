@@ -27,7 +27,6 @@ function writeDB(name, data) {
   fs.renameSync(p + '.tmp', p);
 }
 
-// ── Servers ───────────────────────────────────────────────────────────────────
 function getServer(guildId) { return readDB('servers')[guildId] || null; }
 function setServer(guildId, data) {
   const db = readDB('servers');
@@ -36,7 +35,6 @@ function setServer(guildId, data) {
   return db[guildId];
 }
 
-// ── Config (channels, roles, sheet) ──────────────────────────────────────────
 function getConfig(guildId) { return readDB('configs')[guildId] || {}; }
 function setConfig(guildId, data) {
   const db = readDB('configs');
@@ -45,19 +43,24 @@ function setConfig(guildId, data) {
   return db[guildId];
 }
 
-// ── Scrim settings ────────────────────────────────────────────────────────────
 function getScrimSettings(guildId) {
-  const defaults = { scrim_name: 'SCRIM', lobbies: 4, slots: 16, first_slot: 1 };
+  // slots_per_lobby: slots per lobby (default 24)
+  // slots: kept for legacy but slots_per_lobby takes priority in display
+  const defaults = { scrim_name: 'SCRIM', lobbies: 4, slots_per_lobby: 24, slots: 96, first_slot: 1 };
   return { ...defaults, ...(readDB('scrim_settings')[guildId] || {}) };
 }
 function setScrimSettings(guildId, data) {
   const db = readDB('scrim_settings');
   db[guildId] = { ...db[guildId], ...data };
+  // Keep slots in sync with slots_per_lobby * lobbies for legacy compatibility
+  const updated = db[guildId];
+  if (data.slots_per_lobby || data.lobbies) {
+    updated.slots = (updated.slots_per_lobby || 24) * (updated.lobbies || 4);
+  }
   writeDB('scrim_settings', db);
-  return db[guildId];
+  return updated;
 }
 
-// ── Lobby config: { A: { channel_id, role_id }, B: {...}, ... } ───────────────
 function getLobbyConfig(guildId) { return readDB('lobby_configs')[guildId] || {}; }
 function setLobbyConfig(guildId, data) {
   const db = readDB('lobby_configs');
@@ -66,7 +69,6 @@ function setLobbyConfig(guildId, data) {
   return db[guildId];
 }
 
-// ── Registrations ─────────────────────────────────────────────────────────────
 function getRegistrations(guildId) { return readDB('registrations')[guildId] || { slots: [], waitlist: [] }; }
 function setRegistrations(guildId, data) {
   const db = readDB('registrations');
@@ -79,7 +81,6 @@ function clearRegistrations(guildId) {
   writeDB('registrations', db);
 }
 
-// ── Matches ───────────────────────────────────────────────────────────────────
 function getMatches(guildId) { return readDB('matches')[guildId] || {}; }
 function setMatch(guildId, lobbyId, data) {
   const db = readDB('matches');
