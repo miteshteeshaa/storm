@@ -6,6 +6,7 @@ const { extractSheetId, readLobbyResults, writeLeaderboard } = require('../../ut
 
 // Official placement point table
 const PLACEMENT_POINTS = [15, 12, 10, 8, 6, 5, 4, 3, 2, 1];
+const LOBBY_LETTERS    = ['A', 'B', 'C', 'D', 'E', 'F'];
 
 function calcPlacementPts(placement) {
   if (!placement || placement < 1) return 0;
@@ -32,8 +33,19 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('result')
     .setDescription('Post results for a lobby (Admin only)')
-    .addIntegerOption(opt =>
-      opt.setName('lobby').setDescription('Lobby number').setRequired(true).setMinValue(1).setMaxValue(20)
+    // FIX: Use a string option for lobby letter (A, B, C...) not a number
+    .addStringOption(opt =>
+      opt.setName('lobby')
+        .setDescription('Lobby letter (A, B, C, D, E, F)')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Lobby A', value: 'A' },
+          { name: 'Lobby B', value: 'B' },
+          { name: 'Lobby C', value: 'C' },
+          { name: 'Lobby D', value: 'D' },
+          { name: 'Lobby E', value: 'E' },
+          { name: 'Lobby F', value: 'F' },
+        )
     ),
 
   async execute(interaction) {
@@ -44,8 +56,9 @@ module.exports = {
       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
     }
 
-    const lobbyNumber = interaction.options.getInteger('lobby');
-    const config = getConfig(interaction.guildId);
+    // FIX: lobbyLetter is now 'A', 'B', etc. — matches what's stored in teams and sheets
+    const lobbyLetter = interaction.options.getString('lobby').toUpperCase();
+    const config      = getConfig(interaction.guildId);
 
     await interaction.deferReply({ ephemeral: false });
 
@@ -57,27 +70,27 @@ module.exports = {
     let rawResults;
     try {
       const sheetId = extractSheetId(config.sheet_url);
-      rawResults = await readLobbyResults(sheetId, lobbyNumber);
+      rawResults    = await readLobbyResults(sheetId, lobbyLetter);
     } catch (e) {
       return interaction.editReply({ embeds: [errorEmbed('Sheet Error', `Could not read sheet: ${e.message}`)] });
     }
 
     if (!rawResults || rawResults.length === 0) {
-      return interaction.editReply({ embeds: [errorEmbed('No Data', `No teams found for Lobby ${lobbyNumber}. Make sure kills & placement are filled in the sheet.`)] });
+      return interaction.editReply({ embeds: [errorEmbed('No Data', `No teams found for Lobby ${lobbyLetter}. Make sure kills & placement are filled in the sheet.`)] });
     }
 
     // ─── Calculate points ──────────────────────────────────────────────────────
     const results = rawResults.map(t => {
       const placementPts = calcPlacementPts(t.placement);
-      const total = t.kills + placementPts;
+      const total        = t.kills + placementPts;
       return { ...t, placement_pts: placementPts, total };
     });
 
-    // ─── Save to memory ────────────────────────────────────────────────────────
-    setMatch(interaction.guildId, lobbyNumber, results);
+    // ─── Save to memory (keyed by letter) ─────────────────────────────────────
+    setMatch(interaction.guildId, lobbyLetter, results);
 
     // ─── Post result embed ─────────────────────────────────────────────────────
-    const rEmbed = resultEmbed(lobbyNumber, results);
+    const rEmbed = resultEmbed(lobbyLetter, results);
 
     if (config.results_channel) {
       try {
@@ -87,7 +100,7 @@ module.exports = {
     }
 
     // ─── Update leaderboard ────────────────────────────────────────────────────
-    const allMatches = getMatches(interaction.guildId);
+    const allMatches  = getMatches(interaction.guildId);
     const leaderboard = buildLeaderboard(allMatches);
 
     // Write leaderboard to sheet
