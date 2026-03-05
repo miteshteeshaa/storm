@@ -85,6 +85,11 @@ module.exports = {
 
       const val = i.values?.[0] || i.customId;
 
+      // Defer immediately to prevent "interaction failed" timeout
+      if (val !== 'sheet_url' && val !== 'slots_lobbies') {
+        try { await i.deferUpdate(); } catch {}
+      }
+
       // ─── Channel pickers ────────────────────────────────────────────────────
       const channelFields = ['register_channel', 'slotlist_channel', 'waitlist_channel', 'results_channel', 'leaderboard_channel', 'idpass_channel', 'admin_channel'];
       const roleFields = ['admin_role', 'registered_role', 'slot_role', 'waitlist_role', 'idpass_role'];
@@ -108,13 +113,13 @@ module.exports = {
         const backBtn = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('config_back').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
         );
-        await i.update({ embeds: [configEmbed(getConfig(interaction.guildId))], components: [row, backBtn] });
+        await i.editReply({ embeds: [configEmbed(getConfig(interaction.guildId))], components: [row, backBtn] });
 
       } else if (val.startsWith('channel_pick_')) {
         const field = val.replace('channel_pick_', '');
         const channelId = i.values[0];
         setConfig(interaction.guildId, { [field]: channelId });
-        await i.update({
+        await i.editReply({
           embeds: [configEmbed(getConfig(interaction.guildId))],
           components: [stepMenu]
         });
@@ -135,13 +140,13 @@ module.exports = {
         const backBtn = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('config_back').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
         );
-        await i.update({ embeds: [configEmbed(getConfig(interaction.guildId))], components: [row, backBtn] });
+        await i.editReply({ embeds: [configEmbed(getConfig(interaction.guildId))], components: [row, backBtn] });
 
       } else if (val.startsWith('role_pick_')) {
         const field = val.replace('role_pick_', '');
         const roleId = i.values[0];
         setConfig(interaction.guildId, { [field]: roleId });
-        await i.update({
+        await i.editReply({
           embeds: [configEmbed(getConfig(interaction.guildId))],
           components: [stepMenu]
         });
@@ -192,7 +197,7 @@ module.exports = {
         await i.showModal(modal);
 
       } else if (val === 'view_config' || val === 'config_back') {
-        await i.update({
+        await i.editReply({
           embeds: [configEmbed(getConfig(interaction.guildId))],
           components: [stepMenu]
         });
