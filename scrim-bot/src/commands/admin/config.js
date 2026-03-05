@@ -35,7 +35,7 @@ function buildConfigEmbed(config, settings, lobbyConf) {
   const ch = id => id ? `<#${id}>` : '`Not Set`';
   const ro = id => id ? `<@&${id}>` : '`Not Set`';
   const numLobbies   = settings.lobbies || 4;
-  const lobbyLetters = ['A','B','C','D','E','F'].slice(0, numLobbies);
+  const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
 
   const lobbyLines = lobbyLetters.map(l => {
     const lc = lobbyConf[l] || {};
@@ -152,7 +152,7 @@ function buildRolesMenu() {
 // ── Build lobbies submenu (dynamic based on lobby count) ──────────────────────
 function buildLobbiesMenu(settings) {
   const numLobbies   = settings.lobbies || 4;
-  const lobbyLetters = ['A','B','C','D','E','F'].slice(0, numLobbies);
+  const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
 
   const options = lobbyLetters.flatMap(l => [
     { label: `🏟️ Lobby ${l} — Channel`, value: `lobby_channel_${l}`, description: `Private channel for Lobby ${l}` },
@@ -263,7 +263,7 @@ module.exports = {
       if (customId === 'config_scrim') {
         const labels = {
           scrim_name: ['Scrim Name', 'e.g. SUNGOLD LEAGUE', stg.scrim_name],
-          lobbies:    ['Number of Lobbies (1-6)', 'e.g. 4', String(stg.lobbies)],
+          lobbies:    ['Number of Lobbies (1-10)', 'e.g. 4', String(stg.lobbies)],
           slots:      ['Total Slots', 'e.g. 24', String(stg.slots)],
           first_slot: ['First Slot Number', 'e.g. 1', String(stg.first_slot)],
         };
@@ -283,9 +283,9 @@ module.exports = {
         if (['lobbies','slots','first_slot'].includes(value)) {
           const num = parseInt(raw);
           if (!isNaN(num) && num >= 1) {
-            if (value === 'lobbies' && num > 6) {
-              // Cap at 6 lobbies max
-              setScrimSettings(interaction.guildId, { [value]: 6 });
+            if (value === 'lobbies' && num > 10) {
+              // Cap at 10 lobbies max
+              setScrimSettings(interaction.guildId, { [value]: 10 });
             } else {
               setScrimSettings(interaction.guildId, { [value]: num });
             }
