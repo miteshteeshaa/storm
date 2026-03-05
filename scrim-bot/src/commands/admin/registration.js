@@ -2,7 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getServer, setServer, getConfig, getRegistrations } = require('../../utils/database');
 const { errorEmbed, successEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
-const { registerConfirmSession, buildSlotListEmbed } = require('../handlers/reactionHandler');
+const { registerConfirmSession, buildSlotListEmbed } = require('../../handlers/reactionHandler');
 
 const openData = new SlashCommandBuilder()
   .setName('open')
@@ -38,7 +38,7 @@ async function executeOpen(interaction) {
   const embed = new EmbedBuilder()
     .setColor(0x00FF7F)
     .setTitle('🎮 SCRIM REGISTRATION IS NOW OPEN!')
-    .setDescription('Use `/register` to register your team!\n\n**Required info:**\n> `team_name` — Full team name\n> `team_tag` — Short tag e.g. [TA]\n> `manager` — Tag your captain/manager')
+    .setDescription('Use `/register` to register your team!\n\n**Required info:**\n> `team_name` — Full team name\n> `team_tag` — Short tag e.g. ZRX\n> `manager` — Tag your captain/manager')
     .addFields(
       { name: '📋 Available Slots', value: `\`${maxSlots}\``, inline: true },
       { name: '📌 Command', value: '`/register`', inline: true },
@@ -73,7 +73,7 @@ async function executeClose(interaction) {
   const data     = getRegistrations(interaction.guildId);
   const maxSlots = config.max_slots || 100;
 
-  // Post CLOSED notice
+  // Post CLOSED notice in registration channel
   if (config.register_channel) {
     try {
       const ch = await interaction.guild.channels.fetch(config.register_channel);
@@ -91,17 +91,17 @@ async function executeClose(interaction) {
     } catch {}
   }
 
-  // Post slot list + CONFIRM YOUR SLOTS
+  // Post slot list + CONFIRM YOUR SLOTS in slotlist channel
   if (config.slotlist_channel && data.slots.length > 0) {
     try {
       const ch = await interaction.guild.channels.fetch(config.slotlist_channel);
       if (ch) {
-        // 1. Numbered slot list — will be edited live as teams react
+        // 1. Post the numbered slot list — edited live as teams react
         const slotListMsg = await ch.send({
           embeds: [buildSlotListEmbed(data.slots, maxSlots)]
         });
 
-        // 2. CONFIRM YOUR SLOTS message
+        // 2. Post CONFIRM YOUR SLOTS
         const confirmMsg = await ch.send({
           embeds: [
             new EmbedBuilder()
@@ -119,7 +119,7 @@ async function executeClose(interaction) {
         await confirmMsg.react('✅');
         await confirmMsg.react('❌');
 
-        // 3. Tell the reaction handler which message to watch
+        // 3. Register the session
         registerConfirmSession(
           interaction.guildId,
           confirmMsg.id,
