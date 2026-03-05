@@ -2,9 +2,10 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { loadCommands, deployCommands } = require('./handlers/commandHandler');
 const interactionHandler = require('./handlers/interactionHandler');
+const { handleReactionAdd, handleReactionRemove } = require('./handlers/reactionHandler');
 const http = require('http');
 
-// ─── Keep-alive server (start FIRST so Railway sees a port) ──────────────────
+// ─── Keep-alive server ────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Scrim Bot is alive!');
@@ -18,7 +19,6 @@ const required = ['DISCORD_TOKEN', 'CLIENT_ID'];
 for (const key of required) {
   if (!process.env[key]) {
     console.error(`❌ MISSING ENVIRONMENT VARIABLE: ${key}`);
-    console.error(`   Go to Railway → Variables tab and add: ${key}`);
     process.exit(1);
   }
 }
@@ -34,8 +34,14 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions, // ← needed for ✅ ❌ reactions
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.GuildMember],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.GuildMember,
+    Partials.Reaction, // ← needed to catch reactions on older messages
+  ],
 });
 
 // ─── Ready ────────────────────────────────────────────────────────────────────
@@ -50,8 +56,12 @@ client.once('ready', async () => {
   await deployCommands(client);
 });
 
-// ─── Interactions ─────────────────────────────────────────────────────────────
+// ─── Slash commands & components ──────────────────────────────────────────────
 client.on('interactionCreate', (interaction) => interactionHandler(client, interaction));
+
+// ─── Reactions ────────────────────────────────────────────────────────────────
+client.on('messageReactionAdd',    (reaction, user) => handleReactionAdd(reaction, user));
+client.on('messageReactionRemove', (reaction, user) => handleReactionRemove(reaction, user));
 
 // ─── Anti-crash ───────────────────────────────────────────────────────────────
 process.on('unhandledRejection', (err) => {
@@ -65,6 +75,5 @@ process.on('uncaughtException', (err) => {
 console.log('🔑 Attempting Discord login...');
 client.login(process.env.DISCORD_TOKEN).catch(err => {
   console.error('❌ LOGIN FAILED:', err.message);
-  console.error('   Check your DISCORD_TOKEN in Railway Variables');
   process.exit(1);
 });
