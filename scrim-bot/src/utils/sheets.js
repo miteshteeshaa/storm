@@ -37,23 +37,37 @@ async function ensureSheetExists(spreadsheetId, sheetName) {
   }
 }
 
-async function writeRegistrationSheet(spreadsheetId, teams) {
+async function writeRegistrationSheet(spreadsheetId, teams, client) {
   const auth = getAuth();
   const sheets = google.sheets({ version: 'v4', auth });
   await ensureSheetExists(spreadsheetId, 'Registration');
 
   const headers = [['Slot', 'Team Name', 'Tag', 'Captain', 'Discord ID', 'Lobby', 'Kills', 'Placement', 'Total Points']];
-  const rows = teams.map((t, i) => [
-    i + 1,
-    t.team_name,
-    t.team_tag || '',
-    t.captain_name,
-    t.captain_id,
-    t.lobby || '',
-    '',
-    '',
-    ''
-  ]);
+
+  // FIX: Resolve captain display name from Discord ID
+  const rows = await Promise.all(teams.map(async (t, i) => {
+    let captainName = t.captain_name || t.captain_id; // fallback to ID if name not stored
+    // If we have a client and captain_id, try to get username
+    if (client && t.captain_id) {
+      try {
+        const user = await client.users.fetch(t.captain_id);
+        captainName = user.displayName || user.username || t.captain_id;
+      } catch {
+        captainName = t.captain_id;
+      }
+    }
+    return [
+      i + 1,
+      t.team_name,
+      t.team_tag || '',
+      captainName,
+      t.captain_id,
+      t.lobby || '',
+      '',
+      '',
+      ''
+    ];
+  }));
 
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
@@ -68,7 +82,8 @@ async function writeRegistrationSheet(spreadsheetId, teams) {
   });
 }
 
-async function readLobbyResults(spreadsheetId, lobbyNumber) {
+// FIX: readLobbyResults now accepts lobby LETTER (A, B, C...) not a number
+async function readLobbyResults(spreadsheetId, lobbyLetter) {
   const auth = getAuth();
   const sheets = google.sheets({ version: 'v4', auth });
 
@@ -80,21 +95,22 @@ async function readLobbyResults(spreadsheetId, lobbyNumber) {
   const rows = res.data.values || [];
   if (rows.length < 2) return [];
 
-  const header = rows[0];
-  const slotIdx = header.indexOf('Slot');
-  const nameIdx = header.indexOf('Team Name');
+  const header   = rows[0];
+  const slotIdx  = header.indexOf('Slot');
+  const nameIdx  = header.indexOf('Team Name');
   const lobbyIdx = header.indexOf('Lobby');
   const killsIdx = header.indexOf('Kills');
-  const placIdx = header.indexOf('Placement');
+  const placIdx  = header.indexOf('Placement');
 
+  // FIX: Compare with lobby letter (e.g. 'A', 'B') not lobby number
   return rows.slice(1)
-    .filter(r => r[lobbyIdx] == lobbyNumber)
+    .filter(r => r[lobbyIdx] && r[lobbyIdx].toString().trim().toUpperCase() === lobbyLetter.toString().trim().toUpperCase())
     .map(r => ({
-      slot: r[slotIdx],
+      slot:      r[slotIdx],
       team_name: r[nameIdx],
-      lobby: r[lobbyIdx],
-      kills: parseInt(r[killsIdx]) || 0,
-      placement: parseInt(r[placIdx]) || 0,
+      lobby:     r[lobbyIdx],
+      kills:     parseInt(r[killsIdx]) || 0,
+      placement: parseInt(r[placIdx])  || 0,
     }));
 }
 
@@ -103,10 +119,9 @@ async function writeLeaderboard(spreadsheetId, leaderboard) {
   const sheets = google.sheets({ version: 'v4', auth });
   await ensureSheetExists(spreadsheetId, 'Leaderboard');
 
-  // Get match columns dynamically
-  const matchCount = Math.max(...leaderboard.map(t => t.matches.length), 0);
+  const matchCount   = Math.max(...leaderboard.map(t => t.matches.length), 0);
   const matchHeaders = Array.from({ length: matchCount }, (_, i) => `Match ${i + 1}`);
-  const headers = [['Rank', 'Team Name', ...matchHeaders, 'Total Points']];
+  const headers      = [['Rank', 'Team Name', ...matchHeaders, 'Total Points']];
 
   const rows = leaderboard.map((t, i) => [
     i + 1,
