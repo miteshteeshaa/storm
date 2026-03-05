@@ -25,10 +25,16 @@ const NUMBER_EMOJIS = {
   '6️⃣':6,'7️⃣':7,'8️⃣':8,'9️⃣':9,'🔟':10,
 };
 
+// ── Circled number emoji display (① ② ③ ... ㉕) ──────────────────────────────
+const CIRCLED_NUMBERS = [
+  '①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩',
+  '⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱','⑲','⑳',
+  '㉑','㉒','㉓','㉔','㉕'
+];
+
 function numEmoji(n) {
-  const map = {0:'0️⃣',1:'1️⃣',2:'2️⃣',3:'3️⃣',4:'4️⃣',5:'5️⃣',6:'6️⃣',7:'7️⃣',8:'8️⃣',9:'9️⃣',10:'🔟'};
-  if (map[n]) return map[n];
-  return String(n).split('').map(d => map[parseInt(d)] || d).join('');
+  if (n >= 1 && n <= 25) return CIRCLED_NUMBERS[n - 1];
+  return `**${n}**`;
 }
 
 // ── Build overall slot list embed ─────────────────────────────────────────────
@@ -79,7 +85,7 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
     ? `📋 ${scrim_name} — LOBBY ${lobbyFilter}`
     : `📋 ${scrim_name} — SLOT LIST`;
 
-  const assigned   = slots.filter(t => t.lobby).length;
+  const assigned    = slots.filter(t => t.lobby).length;
   const unassignedC = slots.length - assigned;
 
   const embed = new EmbedBuilder()
@@ -274,7 +280,7 @@ async function handleReactionRemove(reaction, user) {
     if (!team) return;
 
     if (LOBBY_EMOJIS[emoji] && team.lobby === LOBBY_EMOJIS[emoji]) {
-      // Remove lobby role
+      // Remove lobby role from all players
       const lc = lobbyConf[team.lobby];
       if (lc?.role_id) {
         for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
@@ -339,7 +345,7 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
     // Search for existing
     const msgs     = await ch.messages.fetch({ limit: 20 });
     const existing = msgs.find(m =>
-      m.author.id === guild.client?.user?.id || m.author.bot &&
+      m.author.bot &&
       m.embeds[0]?.title?.includes(`Lobby ${team.lobby}`)
     );
 
