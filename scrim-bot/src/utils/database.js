@@ -1,28 +1,18 @@
 const fs = require('fs');
 const path = require('path');
 
-// Railway Volume mounts at /data by default.
-// If no volume is attached, falls back to local ./data folder.
-// To add a volume in Railway: Service → Volumes → Add Volume → Mount Path: /data
 const DATA_DIR = process.env.DATA_DIR || '/data';
 
-// Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    console.log(`📁 Data directory created at: ${DATA_DIR}`);
-  } catch (err) {
-    // If /data isn't writable (no volume), fall back to local
+  } catch {
     const fallback = path.join(__dirname, '../../data');
     fs.mkdirSync(fallback, { recursive: true });
-    console.warn(`⚠️  Could not use ${DATA_DIR}, falling back to ${fallback}`);
-    console.warn('   Add a Railway Volume at /data to persist data across deploys!');
-    module.exports._dataDir = fallback;
   }
 }
 
 function getDataDir() {
-  // Check if /data is writable
   try {
     fs.accessSync(DATA_DIR, fs.constants.W_OK);
     return DATA_DIR;
@@ -50,18 +40,15 @@ function readDB(name) {
 
 function writeDB(name, data) {
   const filePath = getFilePath(name);
-  // Write to a temp file first, then rename — prevents corruption on crash
   const tmpPath = filePath + '.tmp';
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf8');
   fs.renameSync(tmpPath, filePath);
 }
 
-// ─── Servers ────────────────────────────────────────────────────────────────
+// ── Servers ───────────────────────────────────────────────────────────────────
 function getServer(guildId) {
-  const db = readDB('servers');
-  return db[guildId] || null;
+  return readDB('servers')[guildId] || null;
 }
-
 function setServer(guildId, data) {
   const db = readDB('servers');
   db[guildId] = { ...db[guildId], ...data };
@@ -69,12 +56,10 @@ function setServer(guildId, data) {
   return db[guildId];
 }
 
-// ─── Config ─────────────────────────────────────────────────────────────────
+// ── Config (channels, roles, sheet) ──────────────────────────────────────────
 function getConfig(guildId) {
-  const db = readDB('configs');
-  return db[guildId] || {};
+  return readDB('configs')[guildId] || {};
 }
-
 function setConfig(guildId, data) {
   const db = readDB('configs');
   db[guildId] = { ...db[guildId], ...data };
@@ -82,37 +67,49 @@ function setConfig(guildId, data) {
   return db[guildId];
 }
 
-// ─── Registrations ───────────────────────────────────────────────────────────
-function getRegistrations(guildId) {
-  const db = readDB('registrations');
-  return db[guildId] || { slots: [], waitlist: [] };
+// ── Scrim settings (name, lobbies, slots, first_slot, etc) ───────────────────
+function getScrimSettings(guildId) {
+  const defaults = {
+    scrim_name:  'SCRIM',
+    lobbies:     4,
+    slots:       16,
+    first_slot:  1,
+  };
+  const db = readDB('scrim_settings');
+  return { ...defaults, ...(db[guildId] || {}) };
+}
+function setScrimSettings(guildId, data) {
+  const db = readDB('scrim_settings');
+  db[guildId] = { ...db[guildId], ...data };
+  writeDB('scrim_settings', db);
+  return db[guildId];
 }
 
+// ── Registrations ─────────────────────────────────────────────────────────────
+function getRegistrations(guildId) {
+  return readDB('registrations')[guildId] || { slots: [], waitlist: [] };
+}
 function setRegistrations(guildId, data) {
   const db = readDB('registrations');
   db[guildId] = data;
   writeDB('registrations', db);
 }
-
 function clearRegistrations(guildId) {
   const db = readDB('registrations');
   db[guildId] = { slots: [], waitlist: [] };
   writeDB('registrations', db);
 }
 
-// ─── Matches ─────────────────────────────────────────────────────────────────
+// ── Matches ───────────────────────────────────────────────────────────────────
 function getMatches(guildId) {
-  const db = readDB('matches');
-  return db[guildId] || {};
+  return readDB('matches')[guildId] || {};
 }
-
 function setMatch(guildId, lobbyId, data) {
   const db = readDB('matches');
   if (!db[guildId]) db[guildId] = {};
   db[guildId][lobbyId] = data;
   writeDB('matches', db);
 }
-
 function clearMatches(guildId) {
   const db = readDB('matches');
   db[guildId] = {};
@@ -122,6 +119,7 @@ function clearMatches(guildId) {
 module.exports = {
   getServer, setServer,
   getConfig, setConfig,
+  getScrimSettings, setScrimSettings,
   getRegistrations, setRegistrations, clearRegistrations,
-  getMatches, setMatch, clearMatches
+  getMatches, setMatch, clearMatches,
 };
