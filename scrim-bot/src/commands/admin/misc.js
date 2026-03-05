@@ -1,7 +1,7 @@
 const { SlashCommandBuilder } = require('discord.js');
 const {
   getConfig, getRegistrations, clearRegistrations,
-  setServer, clearMatches, getScrimSettings
+  setServer, clearMatches, getScrimSettings, getLobbyConfig
 } = require('../../utils/database');
 const { successEmbed, errorEmbed, infoEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
@@ -133,47 +133,55 @@ const clearCmd = {
     clearMatches(interaction.guildId);
     setServer(interaction.guildId, { registration_open: false });
 
-    // ── Clear in-memory slot message IDs so fresh messages are posted next scrim
+    // ── Clear in-memory slot message IDs so fresh messages post next scrim ───
     clearPersistentSlotListIds(interaction.guildId);
 
-    // ── Bulk-delete messages in registration, slot allocation & waitlist channels
-    // Discord only allows bulk delete for messages newer than 14 days
+    // ── Collect all channels to clear ────────────────────────────────────────
+    // Registration channel, slot-allocation (team cards), waitlist + all lobby channels
+    const lobbyConf = getLobbyConfig(interaction.guildId);
+    const lobbyChannelIds = ['A','B','C','D','E','F']
+      .map(l => lobbyConf[l]?.channel_id)
+      .filter(Boolean);
+
     const channelsToClear = [
-      config.register_channel,
-      config.slotlist_channel,
-      config.waitlist_channel,
+      config.register_channel,   // registration confirmations
+      config.slotlist_channel,   // team cards (slot allocation)
+      config.waitlist_channel,   // waitlist
+      ...lobbyChannelIds,        // per-lobby slot list channels
     ].filter(Boolean);
+
+    // Deduplicate in case any channels overlap
+    const uniqueChannels = [...new Set(channelsToClear)];
 
     const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
     let clearedChannels = 0;
 
-    for (const chId of channelsToClear) {
+    for (const chId of uniqueChannels) {
       try {
         const ch = await interaction.guild.channels.fetch(chId);
         if (!ch) continue;
 
-        // Keep fetching and deleting until no deletable messages remain
-        // Using a lastId cursor so we don't re-fetch already-deleted messages
-        let lastId = undefined;
-        while (true) {
-          const fetchOptions = lastId ? { limit: 100, before: lastId } : { limit: 100 };
-          const messages     = await ch.messages.fetch(fetchOptions);
+        // Loop: fetch latest 100, delete what we can, repeat until channel is empty
+        // We always fetch from the top (no cursor) because after deletion the newest
+        // messages change — using a cursor would skip already-deleted slots
+        let keepGoing = true;
+        while (keepGoing) {
+          const messages = await ch.messages.fetch({ limit: 100 });
           if (messages.size === 0) break;
 
           const deletable = messages.filter(m => Date.now() - m.createdTimestamp < TWO_WEEKS);
 
-          if (deletable.size > 0) {
-            if (deletable.size === 1) {
-              // bulkDelete requires at least 2 messages; delete single message individually
-              await deletable.first().delete().catch(() => {});
-            } else {
-              await ch.bulkDelete(deletable, true).catch(() => {});
-            }
+          if (deletable.size === 0) {
+            // Only old messages left — can't delete, stop
+            break;
+          } else if (deletable.size === 1) {
+            await deletable.first().delete().catch(() => {});
+          } else {
+            await ch.bulkDelete(deletable, true).catch(() => {});
           }
 
-          // If there are old messages we can't bulk-delete, skip past them
-          if (messages.size < 100) break; // No more messages in channel
-          lastId = messages.last().id;
+          // If we got fewer than 100 total and deleted all deletable ones, we're done
+          if (messages.size < 100 && deletable.size === messages.size) keepGoing = false;
         }
         clearedChannels++;
       } catch {} // Channel may not exist or bot lacks permissions
