@@ -90,20 +90,20 @@ const clearCmd = {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    const config   = getConfig(interaction.guildId);
-    const settings = getScrimSettings(interaction.guildId);
-    const lobbyConf = getLobbyConfig(interaction.guildId);
+    const config     = getConfig(interaction.guildId);
+    const settings   = getScrimSettings(interaction.guildId);
+    const lobbyConf  = getLobbyConfig(interaction.guildId);
     const numLobbies = settings.lobbies || 4;
     const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
 
     // ── Build select menu with individual lobbies + Clear All ─────────────────
     const options = lobbyLetters.map(l => ({
-      label: `🏟️ Clear Lobby ${l}`,
+      label: `Clear Lobby ${l}`,
       value: `clear_lobby_${l}`,
       description: `Remove all Lobby ${l} teams and reset its slot list`,
     }));
     options.push({
-      label: '🗑️ Clear All',
+      label: 'Clear All',
       value: 'clear_all',
       description: 'Remove ALL teams, clear ALL channels, close registration',
     });
@@ -111,24 +111,31 @@ const clearCmd = {
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('clear_select')
-        .setPlaceholder('What do you want to clear?')
+        .setPlaceholder('Select what to clear...')
         .addOptions(options)
     );
 
-    await interaction.reply({ embeds: [{ color: 0xFF6600, description: '⚠️ **Select what to clear:**' }], components: [row], ephemeral: true });
+    // Send ephemeral reply with the select menu
+    await interaction.reply({
+      embeds: [{ color: 0xFF6600, description: '⚠️ **Select what to clear:**' }],
+      components: [row],
+      ephemeral: true,
+      fetchReply: true,
+    });
 
-    let sel;
+    // Collect the selection directly from the interaction (works with ephemeral)
+    let choice;
     try {
-      sel = await interaction.channel.awaitMessageComponent({
+      const sel = await interaction.awaitMessageComponent({
         filter: x => x.customId === 'clear_select' && x.user.id === interaction.user.id,
         time: 60_000,
       });
+      choice = sel.values[0];
+      // Acknowledge the component interaction immediately
+      await sel.deferUpdate();
     } catch {
       return interaction.editReply({ embeds: [errorEmbed('Timed Out', 'No selection made.')], components: [] });
     }
-
-    await sel.deferUpdate();
-    const choice = sel.values[0];
 
     // ── Helper: delete all recent messages in a channel ───────────────────────
     const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
@@ -191,9 +198,8 @@ const clearCmd = {
       setRegistrations(interaction.guildId, data);
 
       // Clear in-memory message ID for this lobby so a fresh embed posts
-      const ids = getPersistentSlotListId(interaction.guildId);
-      delete ids[`lobby_${letter}`];
-      setPersistentSlotListId(interaction.guildId, ids);
+      // Set to null explicitly — merge-based set would re-add deleted keys
+      setPersistentSlotListId(interaction.guildId, { [`lobby_${letter}`]: null });
 
       // Clear the lobby's channel messages
       const lc = lobbyConf[letter];
@@ -201,13 +207,7 @@ const clearCmd = {
 
       // Post fresh empty slot list in lobby channel
       if (lc?.channel_id) {
-        try {
-          const ch     = await interaction.guild.channels.fetch(lc.channel_id);
-          const embed  = buildLobbySlotList(data.slots, settings, letter);
-          const newMsg = await ch.send({ embeds: [embed] });
-          setPersistentSlotListId(interaction.guildId, { [`lobby_${letter}`]: newMsg.id });
-          try { await newMsg.pin(); } catch {}
-        } catch {}
+        await postToLobbyChannel(interaction.guild, letter, lobbyConf, settings, data);
       }
 
       return interaction.editReply({
@@ -243,18 +243,11 @@ const clearCmd = {
 
       for (const chId of allChannels) await purgeChannel(chId);
 
-      // After clearing, post a fresh empty slot list in each configured lobby channel
+      // Post fresh empty slot lists in all configured lobby channels
       const freshData = getRegistrations(interaction.guildId);
       for (const letter of lobbyLetters) {
-        const lc = lobbyConf[letter];
-        if (!lc?.channel_id) continue;
-        try {
-          const ch     = await interaction.guild.channels.fetch(lc.channel_id);
-          const embed  = buildLobbySlotList(freshData.slots, settings, letter);
-          const newMsg = await ch.send({ embeds: [embed] });
-          setPersistentSlotListId(interaction.guildId, { [`lobby_${letter}`]: newMsg.id });
-          try { await newMsg.pin(); } catch {}
-        } catch {}
+        if (!lobbyConf[letter]?.channel_id) continue;
+        await postToLobbyChannel(interaction.guild, letter, lobbyConf, settings, freshData);
       }
 
       return interaction.editReply({
