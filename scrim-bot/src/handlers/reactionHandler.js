@@ -11,7 +11,13 @@ const teamCardMap       = new Map(); // messageId → { guildId, teamIndex }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getPersistentSlotListId(guildId)       { return persistentSlotIds.get(guildId) || {}; }
-function setPersistentSlotListId(guildId, data) { persistentSlotIds.set(guildId, { ...getPersistentSlotListId(guildId), ...data }); }
+function setPersistentSlotListId(guildId, data) {
+  const current = getPersistentSlotListId(guildId);
+  const merged  = { ...current, ...data };
+  // Remove any keys explicitly set to null
+  for (const k of Object.keys(merged)) { if (merged[k] === null) delete merged[k]; }
+  persistentSlotIds.set(guildId, merged);
+}
 function clearPersistentSlotListIds(guildId)    { persistentSlotIds.delete(guildId); }
 function registerTeamCard(messageId, guildId, teamIndex) { teamCardMap.set(messageId, { guildId, teamIndex }); }
 function registerConfirmSession(guildId, confirmMessageId, channelId, slotListMessageId) {
