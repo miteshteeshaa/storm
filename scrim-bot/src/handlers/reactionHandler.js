@@ -1,47 +1,82 @@
 const { EmbedBuilder } = require('discord.js');
-const { getConfig, getRegistrations, setRegistrations } = require('../utils/database');
+const { getConfig, getRegistrations, setRegistrations, getScrimSettings } = require('../utils/database');
 
-// ── In-memory session stores ──────────────────────────────────────────────────
-// { guildId: { confirmMessageId, channelId, slotListMessageId } }
-const confirmSessions = new Map();
+// In-memory stores
+const confirmSessions    = new Map(); // guildId → { confirmMessageId, channelId, slotListMessageId }
+const persistentSlotIds  = new Map(); // guildId → messageId of the always-visible slot list
 
-// { guildId: messageId } — the always-visible slot list message
-const persistentSlotListIds = new Map();
+// ── Persistent slot list ──────────────────────────────────────────────────────
+function getPersistentSlotListId(guildId)          { return persistentSlotIds.get(guildId) || null; }
+function setPersistentSlotListId(guildId, msgId)   { persistentSlotIds.set(guildId, msgId); }
 
-// ── Persistent slot list helpers ──────────────────────────────────────────────
-function getPersistentSlotListId(guildId) {
-  return persistentSlotListIds.get(guildId) || null;
-}
-
-function setPersistentSlotListId(guildId, messageId) {
-  persistentSlotListIds.set(guildId, messageId);
-}
-
-// ── Confirm session helpers ───────────────────────────────────────────────────
+// ── Confirm session ───────────────────────────────────────────────────────────
 function registerConfirmSession(guildId, confirmMessageId, channelId, slotListMessageId) {
   confirmSessions.set(guildId, { confirmMessageId, channelId, slotListMessageId });
-  console.log(`📌 Confirm session registered for guild ${guildId}`);
+}
+function getConfirmSession(guildId) { return confirmSessions.get(guildId) || null; }
+
+// ── Number emoji helper ───────────────────────────────────────────────────────
+function numEmoji(n) {
+  const map = {
+    0:'0️⃣',1:'1️⃣',2:'2️⃣',3:'3️⃣',4:'4️⃣',5:'5️⃣',
+    6:'6️⃣',7:'7️⃣',8:'8️⃣',9:'9️⃣',10:'🔟',
+  };
+  if (map[n]) return map[n];
+  // For numbers > 10, combine digits
+  return String(n).split('').map(d => map[parseInt(d)] || d).join('');
 }
 
-function getConfirmSession(guildId) {
-  return confirmSessions.get(guildId) || null;
-}
+// ── Build the persistent slot list (idpass channel) ───────────────────────────
+// Shows all slots from first_slot to first_slot+slots-1
+// Fills in team names as they register
+function buildPersistentSlotList(slots, settings) {
+  const { scrim_name, first_slot, slots: totalSlots } = settings;
+  const lines = [];
 
-// ── Build the slot list embed ─────────────────────────────────────────────────
-function buildSlotListEmbed(slots, maxSlots) {
-  const lines = slots.map((t, i) => {
-    const num  = String(i + 1).padStart(2, ' ');
-    const tag  = `[${t.team_tag}]`;
-    const name = t.team_name;
-    const mgr  = `<@${t.manager_id || t.captain_id}>`;
+  for (let i = 0; i < totalSlots; i++) {
+    const slotNum = first_slot + i;
+    const team    = slots[i];
+    const emoji   = numEmoji(slotNum);
 
-    if (t.confirmed === true) {
-      return `\`${num}\` __${tag} ${name}__ ${mgr}`;       // underline = confirmed
-    } else if (t.confirmed === false) {
-      return `\`${num}\` ~~${tag} ${name}~~ ${mgr}`;       // strikethrough = cancelled
+    if (team) {
+      if (team.confirmed === true) {
+        lines.push(`${emoji} __[${team.team_tag}] ${team.team_name}__ <@${team.manager_id || team.captain_id}>`);
+      } else if (team.confirmed === false) {
+        lines.push(`${emoji} ~~[${team.team_tag}] ${team.team_name}~~ <@${team.manager_id || team.captain_id}>`);
+      } else {
+        lines.push(`${emoji} [${team.team_tag}] ${team.team_name} <@${team.manager_id || team.captain_id}>`);
+      }
     } else {
-      return `\`${num}\` ${tag} ${name} ${mgr}`;           // normal = pending
+      lines.push(`${emoji}`); // empty slot
     }
+  }
+
+  const confirmed = slots.filter(t => t?.confirmed === true).length;
+  const cancelled = slots.filter(t => t?.confirmed === false).length;
+  const pending   = slots.filter(t => t && t.confirmed === undefined).length;
+  const empty     = totalSlots - slots.length;
+
+  return new EmbedBuilder()
+    .setColor(0xFFD700)
+    .setTitle(`📋 ${scrim_name} — SLOT LIST`)
+    .addFields({ name: 'Slots', value: lines.join('\n') || '*No teams yet.*' })
+    .addFields({
+      name: '📊 Status',
+      value: `✅ **${confirmed}** confirmed | ❌ **${cancelled}** cancelled | ⏳ **${pending}** pending | 🔓 **${empty}** open`,
+    })
+    .setTimestamp();
+}
+
+// ── Build confirm-phase slot list (slotlist channel) ─────────────────────────
+function buildConfirmSlotList(slots, settings) {
+  const { scrim_name, first_slot, slots: totalSlots } = settings;
+  const lines = slots.map((t, i) => {
+    const slotNum = first_slot + i;
+    const emoji   = numEmoji(slotNum);
+    const mgr     = `<@${t.manager_id || t.captain_id}>`;
+    if (t.confirmed === true)  return `${emoji} __[${t.team_tag}] ${t.team_name}__ ${mgr}`;
+    if (t.confirmed === false) return `${emoji} ~~[${t.team_tag}] ${t.team_name}~~ ${mgr}`;
+    return `${emoji} [${t.team_tag}] ${t.team_name} ${mgr}`;
   });
 
   const confirmed = slots.filter(t => t.confirmed === true).length;
@@ -50,19 +85,18 @@ function buildSlotListEmbed(slots, maxSlots) {
 
   return new EmbedBuilder()
     .setColor(0xFFD700)
-    .setTitle(`📋 SLOT LIST — ${slots.length}/${maxSlots} Slots`)
-    .setDescription(lines.length > 0 ? lines.join('\n') : '*No teams registered yet.*')
+    .setTitle(`📋 ${scrim_name} — CONFIRM YOUR SLOTS`)
+    .setDescription(lines.join('\n') || '*No teams registered.*')
     .addFields({
       name: '📊 Status',
-      value: `✅ Confirmed: **${confirmed}** | ❌ Cancelled: **${cancelled}** | ⏳ Pending: **${pending}**`,
+      value: `✅ **${confirmed}** confirmed | ❌ **${cancelled}** cancelled | ⏳ **${pending}** pending`,
     })
     .setTimestamp();
 }
 
-// ── Handle reaction added ─────────────────────────────────────────────────────
+// ── Reaction handlers ─────────────────────────────────────────────────────────
 async function handleReactionAdd(reaction, user) {
   if (user.bot) return;
-
   try {
     if (reaction.partial) await reaction.fetch();
     if (reaction.message.partial) await reaction.message.fetch();
@@ -73,42 +107,35 @@ async function handleReactionAdd(reaction, user) {
   if (!guild) return;
 
   const session = getConfirmSession(guild.id);
-  if (!session) return;
-  if (message.id !== session.confirmMessageId) return;
+  if (!session || message.id !== session.confirmMessageId) return;
 
   const emoji = reaction.emoji.name;
   if (emoji !== '✅' && emoji !== '❌') return;
 
-  const config = getConfig(guild.id);
-  const data   = getRegistrations(guild.id);
+  const config   = getConfig(guild.id);
+  const settings = getScrimSettings(guild.id);
+  const data     = getRegistrations(guild.id);
 
-  const teamIndex = data.slots.findIndex(
-    t => t.manager_id === user.id || t.captain_id === user.id
-  );
+  // Find team — allow multiple registrations per user (find by manager_id)
+  // For confirm, we match by captain_id (the person who ran /register)
+  const teamIndex = data.slots.findIndex(t => t.captain_id === user.id || t.manager_id === user.id);
   if (teamIndex === -1) return;
 
   if (emoji === '✅') {
     data.slots[teamIndex].confirmed = true;
-    try {
-      const crossReaction = message.reactions.cache.get('❌');
-      if (crossReaction) await crossReaction.users.remove(user.id);
-    } catch {}
+    try { await message.reactions.cache.get('❌')?.users.remove(user.id); } catch {}
   } else {
     data.slots[teamIndex].confirmed = false;
-    try {
-      const tickReaction = message.reactions.cache.get('✅');
-      if (tickReaction) await tickReaction.users.remove(user.id);
-    } catch {}
+    try { await message.reactions.cache.get('✅')?.users.remove(user.id); } catch {}
   }
 
   setRegistrations(guild.id, data);
-  await refreshSlotListMessage(guild, session, config, data);
+  await refreshConfirmList(guild, session, settings, data);
+  await refreshPersistentList(guild, config, settings, data);
 }
 
-// ── Handle reaction removed ───────────────────────────────────────────────────
 async function handleReactionRemove(reaction, user) {
   if (user.bot) return;
-
   try {
     if (reaction.partial) await reaction.fetch();
     if (reaction.message.partial) await reaction.message.fetch();
@@ -119,39 +146,44 @@ async function handleReactionRemove(reaction, user) {
   if (!guild) return;
 
   const session = getConfirmSession(guild.id);
-  if (!session) return;
-  if (message.id !== session.confirmMessageId) return;
+  if (!session || message.id !== session.confirmMessageId) return;
 
   const emoji = reaction.emoji.name;
   if (emoji !== '✅' && emoji !== '❌') return;
 
-  const config = getConfig(guild.id);
-  const data   = getRegistrations(guild.id);
+  const config   = getConfig(guild.id);
+  const settings = getScrimSettings(guild.id);
+  const data     = getRegistrations(guild.id);
 
-  const teamIndex = data.slots.findIndex(
-    t => t.manager_id === user.id || t.captain_id === user.id
-  );
+  const teamIndex = data.slots.findIndex(t => t.captain_id === user.id || t.manager_id === user.id);
   if (teamIndex === -1) return;
 
-  if (emoji === '✅' && data.slots[teamIndex].confirmed === true) {
-    delete data.slots[teamIndex].confirmed;
-  } else if (emoji === '❌' && data.slots[teamIndex].confirmed === false) {
-    delete data.slots[teamIndex].confirmed;
-  }
+  if (emoji === '✅' && data.slots[teamIndex].confirmed === true)  delete data.slots[teamIndex].confirmed;
+  if (emoji === '❌' && data.slots[teamIndex].confirmed === false) delete data.slots[teamIndex].confirmed;
 
   setRegistrations(guild.id, data);
-  await refreshSlotListMessage(guild, session, config, data);
+  await refreshConfirmList(guild, session, settings, data);
+  await refreshPersistentList(guild, config, settings, data);
 }
 
-// ── Edit the slot list message ────────────────────────────────────────────────
-async function refreshSlotListMessage(guild, session, config, data) {
+async function refreshConfirmList(guild, session, settings, data) {
   try {
-    const ch          = await guild.channels.fetch(session.channelId);
-    const slotListMsg = await ch.messages.fetch(session.slotListMessageId);
-    await slotListMsg.edit({ embeds: [buildSlotListEmbed(data.slots, config.max_slots || 100)] });
-  } catch (err) {
-    console.error('⚠️ Failed to update slot list:', err.message);
-  }
+    const ch  = await guild.channels.fetch(session.channelId);
+    const msg = await ch.messages.fetch(session.slotListMessageId);
+    await msg.edit({ embeds: [buildConfirmSlotList(data.slots, settings)] });
+  } catch {}
+}
+
+async function refreshPersistentList(guild, config, settings, data) {
+  const channelId = config.idpass_channel || config.slotlist_channel;
+  if (!channelId) return;
+  const existingId = getPersistentSlotListId(guild.id);
+  if (!existingId) return;
+  try {
+    const ch  = await guild.channels.fetch(channelId);
+    const msg = await ch.messages.fetch(existingId);
+    await msg.edit({ embeds: [buildPersistentSlotList(data.slots, settings)] });
+  } catch {}
 }
 
 module.exports = {
@@ -159,7 +191,9 @@ module.exports = {
   handleReactionRemove,
   registerConfirmSession,
   getConfirmSession,
-  buildSlotListEmbed,
+  buildPersistentSlotList,
+  buildConfirmSlotList,
   getPersistentSlotListId,
   setPersistentSlotListId,
+  refreshPersistentList,
 };
