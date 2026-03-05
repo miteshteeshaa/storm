@@ -1,15 +1,38 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, '../../data');
+// Railway Volume mounts at /data by default.
+// If no volume is attached, falls back to local ./data folder.
+// To add a volume in Railway: Service → Volumes → Add Volume → Mount Path: /data
+const DATA_DIR = process.env.DATA_DIR || '/data';
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log(`📁 Data directory created at: ${DATA_DIR}`);
+  } catch (err) {
+    // If /data isn't writable (no volume), fall back to local
+    const fallback = path.join(__dirname, '../../data');
+    fs.mkdirSync(fallback, { recursive: true });
+    console.warn(`⚠️  Could not use ${DATA_DIR}, falling back to ${fallback}`);
+    console.warn('   Add a Railway Volume at /data to persist data across deploys!');
+    module.exports._dataDir = fallback;
+  }
+}
+
+function getDataDir() {
+  // Check if /data is writable
+  try {
+    fs.accessSync(DATA_DIR, fs.constants.W_OK);
+    return DATA_DIR;
+  } catch {
+    return path.join(__dirname, '../../data');
+  }
 }
 
 function getFilePath(name) {
-  return path.join(DATA_DIR, `${name}.json`);
+  return path.join(getDataDir(), `${name}.json`);
 }
 
 function readDB(name) {
@@ -27,7 +50,10 @@ function readDB(name) {
 
 function writeDB(name, data) {
   const filePath = getFilePath(name);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  // Write to a temp file first, then rename — prevents corruption on crash
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(tmpPath, filePath);
 }
 
 // ─── Servers ────────────────────────────────────────────────────────────────
