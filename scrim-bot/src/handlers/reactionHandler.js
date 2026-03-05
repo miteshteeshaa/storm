@@ -6,12 +6,13 @@ const {
 
 // ── In-memory stores ──────────────────────────────────────────────────────────
 const confirmSessions   = new Map();
-const persistentSlotIds = new Map(); // guildId → { overall: msgId, A: msgId, B: msgId, ... }
+const persistentSlotIds = new Map();
 const teamCardMap       = new Map(); // messageId → { guildId, teamIndex }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getPersistentSlotListId(guildId)       { return persistentSlotIds.get(guildId) || {}; }
 function setPersistentSlotListId(guildId, data) { persistentSlotIds.set(guildId, { ...getPersistentSlotListId(guildId), ...data }); }
+function clearPersistentSlotListIds(guildId)    { persistentSlotIds.delete(guildId); }
 function registerTeamCard(messageId, guildId, teamIndex) { teamCardMap.set(messageId, { guildId, teamIndex }); }
 function registerConfirmSession(guildId, confirmMessageId, channelId, slotListMessageId) {
   confirmSessions.set(guildId, { confirmMessageId, channelId, slotListMessageId });
@@ -20,25 +21,61 @@ function getConfirmSession(guildId) { return confirmSessions.get(guildId) || nul
 
 // ── Emoji maps ────────────────────────────────────────────────────────────────
 const LOBBY_EMOJIS = { '🅰️':'A', '🅱️':'B', '🇨':'C', '🇩':'D', '🇪':'E', '🇫':'F' };
-const NUMBER_EMOJIS = {
-  '1️⃣':1,'2️⃣':2,'3️⃣':3,'4️⃣':4,'5️⃣':5,
-  '6️⃣':6,'7️⃣':7,'8️⃣':8,'9️⃣':9,'🔟':10,
-};
 
-// ── Circled number emoji display (① ② ③ ... ㉕) ──────────────────────────────
+// ── Circled number emoji display ──────────────────────────────────────────────
 const CIRCLED_NUMBERS = [
   '①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩',
   '⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱','⑲','⑳',
   '㉑','㉒','㉓','㉔','㉕'
 ];
-
 function numEmoji(n) {
   if (n >= 1 && n <= 25) return CIRCLED_NUMBERS[n - 1];
   return String(n);
 }
 
+// ── Find next available slot in a lobby (fills gaps in order) ─────────────────
+function getNextAvailableSlot(slots, lobbyLetter, settings) {
+  const { lobbies: numLobbies, slots: totalSlots, first_slot: firstSlot = 1 } = settings;
+  const slotsPerLobby = Math.ceil(totalSlots / numLobbies);
+  const lastSlot      = firstSlot + slotsPerLobby - 1;
+  const taken         = new Set(
+    slots.filter(t => t.lobby === lobbyLetter && t.lobby_slot).map(t => t.lobby_slot)
+  );
+  for (let s = firstSlot; s <= lastSlot; s++) {
+    if (!taken.has(s)) return s;
+  }
+  return null; // full
+}
+
+// ── Build team card embed ─────────────────────────────────────────────────────
+function buildTeamCardEmbed(team, queueNum) {
+  const playerMentions = (team.players || [team.manager_id]).map(id => `<@${id}>`).join(' ');
+
+  if (team.lobby && team.lobby_slot) {
+    // Assigned state — show lobby + slot prominently, ❌ instruction
+    return new EmbedBuilder()
+      .setColor(0x00FF7F)
+      .setTitle(`✅ [${team.team_tag}] ${team.team_name}`)
+      .setDescription(playerMentions)
+      .addFields(
+        { name: '🏟️ Lobby', value: `**${team.lobby}**`,               inline: true },
+        { name: '🎯 Slot',  value: numEmoji(team.lobby_slot),          inline: true },
+        { name: '​',        value: '*React ❌ to remove slot*',         inline: false },
+      )
+      .setFooter({ text: `Queue #${queueNum}` })
+      .setTimestamp();
+  }
+
+  // Unassigned state
+  return new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle(`[${team.team_tag}] ${team.team_name}`)
+    .setDescription(playerMentions)
+    .setFooter({ text: `Queue #${queueNum} — React with lobby letter to assign` })
+    .setTimestamp();
+}
+
 // ── Build per-lobby slot list embed (posted in each lobby's OWN channel) ──────
-// Format matches screenshot: title "Slots", each line = ① [tag] name @manager
 function buildLobbySlotList(slots, settings, lobbyLetter) {
   const { lobbies: numLobbies, slots: totalSlots, first_slot: firstSlot = 1 } = settings;
   const slotsPerLobby = Math.ceil(totalSlots / numLobbies);
@@ -51,18 +88,14 @@ function buildLobbySlotList(slots, settings, lobbyLetter) {
   for (let i = 0; i < slotsPerLobby; i++) {
     const slotNum = firstSlot + i;
     const team    = lobbyTeams.find(t => t.lobby_slot === slotNum);
-    const emoji   = numEmoji(slotNum);
-
+    const e       = numEmoji(slotNum);
     if (team) {
       const mgr = `<@${team.manager_id || team.captain_id}>`;
-      if (team.confirmed === true)
-        lines.push(`${emoji} __[${team.team_tag}] ${team.team_name}__ ${mgr}`);
-      else if (team.confirmed === false)
-        lines.push(`${emoji} ~~[${team.team_tag}] ${team.team_name}~~ ${mgr}`);
-      else
-        lines.push(`${emoji} [${team.team_tag}] ${team.team_name} ${mgr}`);
+      if (team.confirmed === true)       lines.push(`${e} __[${team.team_tag}] ${team.team_name}__ ${mgr}`);
+      else if (team.confirmed === false)  lines.push(`${e} ~~[${team.team_tag}] ${team.team_name}~~ ${mgr}`);
+      else                               lines.push(`${e} [${team.team_tag}] ${team.team_name} ${mgr}`);
     } else {
-      lines.push(`${emoji}`);
+      lines.push(`${e}`);
     }
   }
 
@@ -73,7 +106,7 @@ function buildLobbySlotList(slots, settings, lobbyLetter) {
     .setTimestamp();
 }
 
-// ── Build overall slot list embed (admin overview — all lobbies combined) ──────
+// ── Build overall slot list embed (admin overview) ────────────────────────────
 function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
   const { scrim_name, lobbies: numLobbies, slots: totalSlots, first_slot: firstSlot = 1 } = settings;
   const lobbyLetters  = ['A','B','C','D','E','F'].slice(0, numLobbies);
@@ -82,44 +115,36 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
 
   const fields = [];
   for (const letter of toShow) {
-    const lobbyTeams = slots
-      .filter(t => t.lobby === letter)
-      .sort((a, b) => a.lobby_slot - b.lobby_slot);
-
+    const lobbyTeams = slots.filter(t => t.lobby === letter).sort((a, b) => a.lobby_slot - b.lobby_slot);
     const lines = [];
     for (let i = 0; i < slotsPerLobby; i++) {
       const slotNum = firstSlot + i;
       const team    = lobbyTeams.find(t => t.lobby_slot === slotNum);
-      const emoji   = numEmoji(slotNum);
-
+      const e       = numEmoji(slotNum);
       if (team) {
         const mgr = `<@${team.manager_id || team.captain_id}>`;
-        if (team.confirmed === true)
-          lines.push(`${emoji} __[${team.team_tag}] ${team.team_name}__ ${mgr}`);
-        else if (team.confirmed === false)
-          lines.push(`${emoji} ~~[${team.team_tag}] ${team.team_name}~~ ${mgr}`);
-        else
-          lines.push(`${emoji} [${team.team_tag}] ${team.team_name} ${mgr}`);
+        if (team.confirmed === true)       lines.push(`${e} __[${team.team_tag}] ${team.team_name}__ ${mgr}`);
+        else if (team.confirmed === false)  lines.push(`${e} ~~[${team.team_tag}] ${team.team_name}~~ ${mgr}`);
+        else                               lines.push(`${e} [${team.team_tag}] ${team.team_name} ${mgr}`);
       } else {
-        lines.push(`${emoji}`);
+        lines.push(`${e}`);
       }
     }
     fields.push({ name: `🏟️ Lobby ${letter}`, value: lines.join('\n') || '*Empty*', inline: false });
   }
 
-  // Unassigned teams
   const unassigned = slots.filter(t => !t.lobby);
   if (!lobbyFilter && unassigned.length > 0) {
     fields.push({
-      name: '⏳ Unassigned',
+      name:  '⏳ Unassigned',
       value: unassigned.map(t => `• [${t.team_tag}] ${t.team_name} <@${t.manager_id || t.captain_id}>`).join('\n'),
       inline: false,
     });
   }
 
-  const title       = lobbyFilter ? `📋 ${scrim_name} — LOBBY ${lobbyFilter}` : `📋 ${scrim_name} — SLOT LIST`;
   const assigned    = slots.filter(t => t.lobby).length;
   const unassignedC = slots.length - assigned;
+  const title       = lobbyFilter ? `📋 ${scrim_name} — LOBBY ${lobbyFilter}` : `📋 ${scrim_name} — SLOT LIST`;
 
   const embed = new EmbedBuilder()
     .setColor(0xFFD700)
@@ -129,7 +154,6 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
   if (!lobbyFilter) {
     embed.addFields({ name: '📊', value: `✅ Assigned: **${assigned}** | ⏳ Unassigned: **${unassignedC}** | Total: **${slots.length}**` });
   }
-
   return embed.setTimestamp();
 }
 
@@ -140,11 +164,8 @@ function buildConfirmSlotList(slots, settings) {
 
   const fields = [];
   for (const letter of lobbyLetters) {
-    const teams = slots
-      .filter(t => t.lobby === letter)
-      .sort((a, b) => a.lobby_slot - b.lobby_slot);
+    const teams = slots.filter(t => t.lobby === letter).sort((a, b) => a.lobby_slot - b.lobby_slot);
     if (teams.length === 0) continue;
-
     const lines = teams.map(t => {
       const e   = numEmoji(t.lobby_slot);
       const mgr = `<@${t.manager_id || t.captain_id}>`;
@@ -180,7 +201,7 @@ async function handleReactionAdd(reaction, user) {
   if (!guild) return;
   const emoji = reaction.emoji.name;
 
-  // ── ADMIN assigning slot on team card ─────────────────────────────────────
+  // ── Team card reactions (admin only) ──────────────────────────────────────
   const cardInfo = teamCardMap.get(message.id);
   if (cardInfo) {
     const config = getConfig(guild.id);
@@ -200,13 +221,54 @@ async function handleReactionAdd(reaction, user) {
     const team      = data.slots[cardInfo.teamIndex];
     if (!team) return;
 
+    // ── ❌ = remove/unassign slot ─────────────────────────────────────────
+    if (emoji === '❌') {
+      if (!team.lobby) {
+        try { await reaction.users.remove(user.id); } catch {}
+        return;
+      }
+
+      // Strip lobby role from all players
+      const lc = lobbyConf[team.lobby];
+      if (lc?.role_id) {
+        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
+          try {
+            const m = await guild.members.fetch(playerId);
+            await m.roles.remove(lc.role_id).catch(() => {});
+          } catch {}
+        }
+      }
+
+      // Remove the lobby letter reaction visually
+      const assignedEmoji = Object.keys(LOBBY_EMOJIS).find(e => LOBBY_EMOJIS[e] === team.lobby);
+      if (assignedEmoji) try { await message.reactions.cache.get(assignedEmoji)?.users.remove(user.id); } catch {}
+
+      delete team.lobby;
+      delete team.lobby_slot;
+      data.slots[cardInfo.teamIndex] = team;
+      setRegistrations(guild.id, data);
+
+      // Remove admin's ❌ so it stays clean and ready to use again
+      try { await reaction.users.remove(user.id); } catch {}
+
+      await updateTeamCardEmbed(message, team, cardInfo.teamIndex + 1);
+      await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+      return;
+    }
+
+    // ── Lobby letter = assign to that lobby ──────────────────────────────
+    if (!LOBBY_EMOJIS[emoji]) {
+      // Ignore anything else
+      try { await reaction.users.remove(user.id); } catch {}
+      return;
+    }
+
+    const newLobby  = LOBBY_EMOJIS[emoji];
     const prevLobby = team.lobby;
 
-    if (LOBBY_EMOJIS[emoji]) {
-      const newLobby = LOBBY_EMOJIS[emoji];
-
-      // Remove old lobby role if switching
-      if (prevLobby && prevLobby !== newLobby && lobbyConf[prevLobby]?.role_id) {
+    // If switching lobbies, free old slot and strip old role
+    if (prevLobby && prevLobby !== newLobby) {
+      if (lobbyConf[prevLobby]?.role_id) {
         for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
           try {
             const m = await guild.members.fetch(playerId);
@@ -214,42 +276,45 @@ async function handleReactionAdd(reaction, user) {
           } catch {}
         }
       }
+      delete team.lobby;
+      delete team.lobby_slot;
+    }
 
-      team.lobby = newLobby;
-
-      // Remove other lobby reactions
-      for (const e of Object.keys(LOBBY_EMOJIS)) {
-        if (e !== emoji) try { await message.reactions.cache.get(e)?.users.remove(user.id); } catch {}
-      }
-
-      // Assign new lobby role to all players
-      if (lobbyConf[newLobby]?.role_id) {
-        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
-          try {
-            const m = await guild.members.fetch(playerId);
-            await m.roles.add(lobbyConf[newLobby].role_id).catch(() => {});
-          } catch {}
-        }
-      }
-
-    } else if (NUMBER_EMOJIS[emoji] !== undefined) {
-      team.lobby_slot = NUMBER_EMOJIS[emoji];
-      for (const e of Object.keys(NUMBER_EMOJIS)) {
-        if (e !== emoji) try { await message.reactions.cache.get(e)?.users.remove(user.id); } catch {}
-      }
-    } else {
+    // Auto-assign next available slot (fills gaps in order)
+    const nextSlot = getNextAvailableSlot(data.slots, newLobby, settings);
+    if (nextSlot === null) {
+      // Lobby full — remove reaction
+      try { await reaction.users.remove(user.id); } catch {}
       return;
+    }
+
+    team.lobby      = newLobby;
+    team.lobby_slot = nextSlot;
+
+    // Remove other lobby letter reactions (only keep the assigned one)
+    for (const e of Object.keys(LOBBY_EMOJIS)) {
+      if (e !== emoji) try { await message.reactions.cache.get(e)?.users.remove(user.id); } catch {}
+    }
+
+    // Assign lobby role to all players
+    if (lobbyConf[newLobby]?.role_id) {
+      for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
+        try {
+          const m = await guild.members.fetch(playerId);
+          await m.roles.add(lobbyConf[newLobby].role_id).catch(() => {});
+        } catch {}
+      }
     }
 
     data.slots[cardInfo.teamIndex] = team;
     setRegistrations(guild.id, data);
 
-    await updateTeamCardEmbed(message, team);
+    await updateTeamCardEmbed(message, team, cardInfo.teamIndex + 1);
     await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
     return;
   }
 
-  // ── TEAM confirming on /confirm message ───────────────────────────────────
+  // ── /confirm reactions ────────────────────────────────────────────────────
   const session = getConfirmSession(guild.id);
   if (!session || message.id !== session.confirmMessageId) return;
   if (emoji !== '✅' && emoji !== '❌') return;
@@ -275,6 +340,8 @@ async function handleReactionAdd(reaction, user) {
 }
 
 // ── Handle reaction remove ────────────────────────────────────────────────────
+// NOTE: We no longer use reaction REMOVE to unassign — ❌ add is the action.
+// This handler only cleans up /confirm reactions.
 async function handleReactionRemove(reaction, user) {
   if (user.bot) return;
   try {
@@ -287,45 +354,7 @@ async function handleReactionRemove(reaction, user) {
   if (!guild) return;
   const emoji = reaction.emoji.name;
 
-  const cardInfo = teamCardMap.get(message.id);
-  if (cardInfo) {
-    const config  = getConfig(guild.id);
-    const member  = await guild.members.fetch(user.id).catch(() => null);
-    if (!member) return;
-    const isAdmin = member.permissions.has('Administrator') ||
-                    guild.ownerId === user.id ||
-                    (config.admin_role && member.roles.cache.has(config.admin_role));
-    if (!isAdmin) return;
-
-    const data      = getRegistrations(guild.id);
-    const settings  = getScrimSettings(guild.id);
-    const lobbyConf = getLobbyConfig(guild.id);
-    const team      = data.slots[cardInfo.teamIndex];
-    if (!team) return;
-
-    if (LOBBY_EMOJIS[emoji] && team.lobby === LOBBY_EMOJIS[emoji]) {
-      const lc = lobbyConf[team.lobby];
-      if (lc?.role_id) {
-        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
-          try {
-            const m = await guild.members.fetch(playerId);
-            await m.roles.remove(lc.role_id).catch(() => {});
-          } catch {}
-        }
-      }
-      delete team.lobby;
-      delete team.lobby_slot;
-    } else if (NUMBER_EMOJIS[emoji] !== undefined && team.lobby_slot === NUMBER_EMOJIS[emoji]) {
-      delete team.lobby_slot;
-    }
-
-    data.slots[cardInfo.teamIndex] = team;
-    setRegistrations(guild.id, data);
-    await updateTeamCardEmbed(message, team);
-    await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-    return;
-  }
-
+  // /confirm unreact
   const session = getConfirmSession(guild.id);
   if (!session || message.id !== session.confirmMessageId) return;
   if (emoji !== '✅' && emoji !== '❌') return;
@@ -345,11 +374,10 @@ async function handleReactionRemove(reaction, user) {
   await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
 }
 
-// ── Post/update slot list in a single lobby's own channel ────────────────────
+// ── Post/update slot list in a lobby's own channel ───────────────────────────
 async function postToLobbyChannel(guild, lobbyLetter, lobbyConf, settings, data) {
   const lc = lobbyConf[lobbyLetter];
   if (!lc?.channel_id) return;
-
   try {
     const ch    = await guild.channels.fetch(lc.channel_id);
     const embed = buildLobbySlotList(data.slots, settings, lobbyLetter);
@@ -364,10 +392,8 @@ async function postToLobbyChannel(guild, lobbyLetter, lobbyConf, settings, data)
       } catch {}
     }
 
-    // Search for existing bot message with "Slots" title
     const msgs     = await ch.messages.fetch({ limit: 20 });
     const existing = msgs.find(m => m.author.bot && m.embeds[0]?.title === 'Slots');
-
     if (existing) {
       setPersistentSlotListId(guild.id, { [key]: existing.id });
       await existing.edit({ embeds: [embed] });
@@ -386,7 +412,7 @@ async function refreshAllSlotLists(guild, config, settings, lobbyConf, data) {
   const ids          = getPersistentSlotListId(guild.id);
   const lobbyLetters = ['A','B','C','D','E','F'].slice(0, settings.lobbies || 4);
 
-  // Overall admin overview (idpass_channel — all lobbies combined)
+  // Overall admin overview
   const overallChannelId = config.idpass_channel;
   if (overallChannelId && ids.overall) {
     try {
@@ -396,25 +422,21 @@ async function refreshAllSlotLists(guild, config, settings, lobbyConf, data) {
     } catch {}
   }
 
-  // Each lobby updates its OWN channel independently
+  // Per-lobby channels
   for (const letter of lobbyLetters) {
     const lc  = lobbyConf[letter];
     const key = `lobby_${letter}`;
     if (!lc?.channel_id) continue;
-
     if (ids[key]) {
       try {
         const ch  = await guild.channels.fetch(lc.channel_id);
         const msg = await ch.messages.fetch(ids[key]);
         await msg.edit({ embeds: [buildLobbySlotList(data.slots, settings, letter)] });
       } catch {
-        // Message gone — post fresh
         await postToLobbyChannel(guild, letter, lobbyConf, settings, data);
       }
     } else {
-      // Only post if this lobby has at least one team assigned
-      const hasTeams = data.slots.some(t => t.lobby === letter);
-      if (hasTeams) {
+      if (data.slots.some(t => t.lobby === letter)) {
         await postToLobbyChannel(guild, letter, lobbyConf, settings, data);
       }
     }
@@ -429,17 +451,10 @@ async function refreshConfirmList(guild, session, settings, data) {
   } catch {}
 }
 
-async function updateTeamCardEmbed(message, team) {
+// ── Update team card embed after assignment/unassignment ─────────────────────
+async function updateTeamCardEmbed(message, team, queueNum) {
   try {
-    const old = message.embeds[0];
-    if (!old) return;
-    const lobbyText = team.lobby
-      ? `Lobby **${team.lobby}**${team.lobby_slot ? ` — Slot **${team.lobby_slot}**` : ' *(slot pending)*'}`
-      : '*(unassigned)*';
-    const updated = EmbedBuilder.from(old)
-      .setColor(team.lobby && team.lobby_slot ? 0x00FF7F : 0x5865F2)
-      .setFooter({ text: `${old.footer?.text?.split(' |')[0] || ''} | ${lobbyText}` });
-    await message.edit({ embeds: [updated] });
+    await message.edit({ embeds: [buildTeamCardEmbed(team, queueNum)] });
   } catch {}
 }
 
@@ -454,6 +469,7 @@ module.exports = {
   buildConfirmSlotList,
   getPersistentSlotListId,
   setPersistentSlotListId,
+  clearPersistentSlotListIds,
   refreshAllSlotLists,
   postToLobbyChannel,
 };
