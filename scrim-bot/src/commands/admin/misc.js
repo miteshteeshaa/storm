@@ -10,6 +10,7 @@ const {
   buildPersistentSlotList,
   getPersistentSlotListId,
   setPersistentSlotListId,
+  clearPersistentSlotListIds,
 } = require('../../handlers/reactionHandler');
 
 // ─── /notify ──────────────────────────────────────────────────────────────────
@@ -132,46 +133,47 @@ const clearCmd = {
     clearMatches(interaction.guildId);
     setServer(interaction.guildId, { registration_open: false });
 
-    // ── Reset the persistent slot list embed (do NOT delete it) ──────────────
-    const channelId  = config.idpass_channel || config.slotlist_channel;
-    const ids        = getPersistentSlotListId(interaction.guildId);
-    const existingId = ids.overall;
-
-    if (channelId && existingId) {
-      try {
-        const ch  = await interaction.guild.channels.fetch(channelId);
-        const msg = await ch.messages.fetch(existingId);
-        await msg.edit({ embeds: [buildPersistentSlotList([], settings)] });
-      } catch {
-        setPersistentSlotListId(interaction.guildId, { overall: null });
-      }
-    }
+    // ── Clear in-memory slot message IDs so fresh messages are posted next scrim
+    clearPersistentSlotListIds(interaction.guildId);
 
     // ── Bulk-delete messages in registration, slot allocation & waitlist channels
-    // Discord only allows bulk delete for messages < 14 days old
+    // Discord only allows bulk delete for messages newer than 14 days
     const channelsToClear = [
       config.register_channel,
       config.slotlist_channel,
       config.waitlist_channel,
     ].filter(Boolean);
 
+    const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
     let clearedChannels = 0;
+
     for (const chId of channelsToClear) {
       try {
         const ch = await interaction.guild.channels.fetch(chId);
         if (!ch) continue;
 
-        // Fetch up to 100 messages and bulk delete (Discord limit per call)
-        // Loop until no more messages or they're too old
-        let deleted = 0;
+        // Keep fetching and deleting until no deletable messages remain
+        // Using a lastId cursor so we don't re-fetch already-deleted messages
+        let lastId = undefined;
         while (true) {
-          const messages = await ch.messages.fetch({ limit: 100 });
-          // Filter out messages older than 14 days (Discord won't bulk delete them)
-          const deletable = messages.filter(m => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
-          if (deletable.size === 0) break;
-          await ch.bulkDelete(deletable, true).catch(() => {});
-          deleted += deletable.size;
-          if (deletable.size < 100) break; // No more messages to delete
+          const fetchOptions = lastId ? { limit: 100, before: lastId } : { limit: 100 };
+          const messages     = await ch.messages.fetch(fetchOptions);
+          if (messages.size === 0) break;
+
+          const deletable = messages.filter(m => Date.now() - m.createdTimestamp < TWO_WEEKS);
+
+          if (deletable.size > 0) {
+            if (deletable.size === 1) {
+              // bulkDelete requires at least 2 messages; delete single message individually
+              await deletable.first().delete().catch(() => {});
+            } else {
+              await ch.bulkDelete(deletable, true).catch(() => {});
+            }
+          }
+
+          // If there are old messages we can't bulk-delete, skip past them
+          if (messages.size < 100) break; // No more messages in channel
+          lastId = messages.last().id;
         }
         clearedChannels++;
       } catch {} // Channel may not exist or bot lacks permissions
