@@ -1,18 +1,66 @@
-const { SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
-  getConfig, getRegistrations, clearRegistrations,
+  getConfig, getRegistrations, setRegistrations, clearRegistrations,
   setServer, clearMatches, getScrimSettings, getLobbyConfig
 } = require('../../utils/database');
 const { successEmbed, errorEmbed, infoEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 const { extractSheetId, writeRegistrationSheet } = require('../../utils/sheets');
 const {
-  buildLobbySlotList,
+  buildPersistentSlotList,
   getPersistentSlotListId,
   setPersistentSlotListId,
-  clearPersistentSlotListIds,
-  postToLobbyChannel,
 } = require('../../handlers/reactionHandler');
+
+// ── Helper: bulk delete all messages in a channel ─────────────────────────────
+async function purgeChannel(guild, channelId) {
+  if (!channelId) return 0;
+  try {
+    const ch = await guild.channels.fetch(channelId);
+    if (!ch) return 0;
+    let deleted = 0;
+    // Bulk delete in batches of 100 (Discord limit)
+    while (true) {
+      const msgs = await ch.messages.fetch({ limit: 100 });
+      if (msgs.size === 0) break;
+      // Messages older than 14 days can't be bulk-deleted — delete individually
+      const recent = msgs.filter(m => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
+      const old    = msgs.filter(m => Date.now() - m.createdTimestamp >= 14 * 24 * 60 * 60 * 1000);
+      if (recent.size > 1) {
+        await ch.bulkDelete(recent).catch(() => {});
+        deleted += recent.size;
+      } else if (recent.size === 1) {
+        await recent.first().delete().catch(() => {});
+        deleted++;
+      }
+      for (const msg of old.values()) {
+        await msg.delete().catch(() => {});
+        deleted++;
+      }
+      if (msgs.size < 100) break;
+    }
+    return deleted;
+  } catch (err) {
+    console.error(`⚠️ purgeChannel error:`, err.message);
+    return 0;
+  }
+}
+
+// ── Helper: post fresh empty slot list in a lobby channel ─────────────────────
+async function postFreshLobbySlotList(guild, letter, lobbyConf, settings) {
+  const lc = lobbyConf[letter];
+  if (!lc?.channel_id) return;
+  try {
+    const ch    = await guild.channels.fetch(lc.channel_id);
+    const embed = buildPersistentSlotList([], settings, letter);
+    const msg   = await ch.send({ embeds: [embed] });
+    try { await msg.pin(); } catch {}
+    // Save the new message ID
+    setPersistentSlotListId(guild.id, { [`lobby_${letter}`]: msg.id });
+  } catch (err) {
+    console.error(`⚠️ postFreshLobbySlotList error:`, err.message);
+  }
+}
 
 // ─── /notify ──────────────────────────────────────────────────────────────────
 const notifyCmd = {
@@ -59,7 +107,7 @@ const sheetCmd = {
     await interaction.deferReply({ ephemeral: true });
     const data = getRegistrations(interaction.guildId);
     try {
-      await writeRegistrationSheet(extractSheetId(config.sheet_url), data.slots, interaction.client);
+      await writeRegistrationSheet(extractSheetId(config.sheet_url), data.slots);
       return interaction.editReply({ embeds: [successEmbed('Sheet Updated', `Pushed **${data.slots.length}** teams.`)] });
     } catch (e) {
       return interaction.editReply({ embeds: [errorEmbed('Sheet Error', e.message)] });
@@ -84,179 +132,146 @@ const linkCmd = {
 const clearCmd = {
   data: new SlashCommandBuilder()
     .setName('clear')
-    .setDescription('Clear a lobby or all registrations (Admin only)'),
+    .setDescription('Clear registrations and reset channels (Admin only)')
+    .addStringOption(opt =>
+      opt.setName('target')
+        .setDescription('What to clear')
+        .setRequired(true)
+        .addChoices(
+          { name: '🗑️ ALL — Clear everything (all lobbies, registration, slot allocation)', value: 'all' },
+          { name: '🏟️ Lobby A', value: 'A' },
+          { name: '🏟️ Lobby B', value: 'B' },
+          { name: '🏟️ Lobby C', value: 'C' },
+          { name: '🏟️ Lobby D', value: 'D' },
+          { name: '🏟️ Lobby E', value: 'E' },
+          { name: '🏟️ Lobby F', value: 'F' },
+        )
+    ),
 
   async execute(interaction) {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    const config     = getConfig(interaction.guildId);
-    const settings   = getScrimSettings(interaction.guildId);
-    const lobbyConf  = getLobbyConfig(interaction.guildId);
-    const numLobbies = settings.lobbies || 4;
-    const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+    const target   = interaction.options.getString('target');
+    const config   = getConfig(interaction.guildId);
+    const settings = getScrimSettings(interaction.guildId);
+    const lobbyConf = getLobbyConfig(interaction.guildId);
+    const data     = getRegistrations(interaction.guildId);
 
-    // ── Build select menu with individual lobbies + Clear All ─────────────────
-    const options = lobbyLetters.map(l => ({
-      label: `Clear Lobby ${l}`,
-      value: `clear_lobby_${l}`,
-      description: `Remove all Lobby ${l} teams and reset its slot list`,
-    }));
-    options.push({
-      label: 'Clear All',
-      value: 'clear_all',
-      description: 'Remove ALL teams, clear ALL channels, close registration',
-    });
+    await interaction.deferReply({ ephemeral: true });
 
-    const row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('clear_select')
-        .setPlaceholder('Select what to clear...')
-        .addOptions(options)
-    );
+    // ── CLEAR ALL ────────────────────────────────────────────────────────────
+    if (target === 'all') {
+      const allTeams = [...data.slots, ...data.waitlist];
 
-    // Send ephemeral reply with the select menu
-    const reply = await interaction.reply({
-      embeds: [{ color: 0xFF6600, description: '⚠️ **Select what to clear:**' }],
-      components: [row],
-      ephemeral: true,
-      fetchReply: true,
-    });
+      // Strip all roles from every player
+      const roleIds = [config.slot_role, config.waitlist_role, config.registered_role, config.idpass_role].filter(Boolean);
+      // Also strip all lobby roles
+      const lobbyLetters = ['A','B','C','D','E','F'].slice(0, settings.lobbies || 4);
+      for (const letter of lobbyLetters) {
+        if (lobbyConf[letter]?.role_id) roleIds.push(lobbyConf[letter].role_id);
+      }
 
-    // Collect from the reply message — works correctly with ephemeral interactions
-    let choice;
-    try {
-      const sel = await reply.awaitMessageComponent({
-        filter: x => x.customId === 'clear_select' && x.user.id === interaction.user.id,
-        time: 60_000,
-      });
-      choice = sel.values[0];
-      await sel.deferUpdate();
-    } catch {
-      return interaction.editReply({ embeds: [errorEmbed('Timed Out', 'No selection made.')], components: [] });
-    }
-
-    // ── Helper: delete all recent messages in a channel ───────────────────────
-    const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
-    async function purgeChannel(chId) {
-      try {
-        const ch = await interaction.guild.channels.fetch(chId);
-        if (!ch) return;
-        let keepGoing = true;
-        while (keepGoing) {
-          const messages = await ch.messages.fetch({ limit: 100 });
-          if (messages.size === 0) break;
-          const deletable = messages.filter(m => Date.now() - m.createdTimestamp < TWO_WEEKS);
-          if (deletable.size === 0) break;
-          if (deletable.size === 1) await deletable.first().delete().catch(() => {});
-          else await ch.bulkDelete(deletable, true).catch(() => {});
-          if (messages.size < 100 && deletable.size === messages.size) keepGoing = false;
-        }
-      } catch {}
-    }
-
-    // ── Helper: strip roles from a list of teams ──────────────────────────────
-    const roleIds = [config.slot_role, config.waitlist_role, config.registered_role].filter(Boolean);
-    async function stripRoles(teams) {
-      for (const team of teams) {
-        const ids = new Set([team.captain_id, team.manager_id, ...(team.players || [])].filter(Boolean));
-        for (const playerId of ids) {
+      for (const team of allTeams) {
+        for (const playerId of [...new Set([team.captain_id, ...(team.players || [])])]) {
           try {
-            const m = await interaction.guild.members.fetch(playerId);
-            for (const rId of roleIds) await m.roles.remove(rId).catch(() => {});
+            const member = await interaction.guild.members.fetch(playerId);
+            for (const roleId of roleIds) await member.roles.remove(roleId).catch(() => {});
           } catch {}
         }
-        // Also strip lobby role
-        if (team.lobby && lobbyConf[team.lobby]?.role_id) {
-          const ids2 = new Set([team.captain_id, team.manager_id, ...(team.players || [])].filter(Boolean));
-          for (const playerId of ids2) {
+      }
+
+      // Clear all data
+      clearRegistrations(interaction.guildId);
+      clearMatches(interaction.guildId);
+      setServer(interaction.guildId, { registration_open: false });
+      // Clear all stored message IDs
+      setPersistentSlotListId(interaction.guildId, {});
+
+      // Purge registration channel
+      const regDeleted  = await purgeChannel(interaction.guild, config.register_channel);
+      // Purge slot allocation channel
+      const slotDeleted = await purgeChannel(interaction.guild, config.slotlist_channel);
+
+      // Post fresh empty slot list in each lobby channel
+      for (const letter of lobbyLetters) {
+        await postFreshLobbySlotList(interaction.guild, letter, lobbyConf, settings);
+      }
+
+      // Post fresh overall slot list in overall channel (if different from slot allocation)
+      const overallChannelId = config.idpass_channel;
+      if (overallChannelId && overallChannelId !== config.slotlist_channel) {
+        try {
+          const ch    = await interaction.guild.channels.fetch(overallChannelId);
+          const embed = buildPersistentSlotList([], settings);
+          const msg   = await ch.send({ embeds: [embed] });
+          try { await msg.pin(); } catch {}
+          setPersistentSlotListId(interaction.guildId, { overall: msg.id });
+        } catch {}
+      }
+
+      return interaction.editReply({
+        embeds: [new EmbedBuilder()
+          .setColor(0x00FF7F)
+          .setTitle('🗑️ CLEARED — ALL')
+          .setDescription(
+            `✅ **${allTeams.length}** teams removed\n` +
+            `🧹 Registration channel: **${regDeleted}** messages deleted\n` +
+            `🧹 Slot allocation: **${slotDeleted}** messages deleted\n` +
+            `📋 Fresh slot lists posted in all lobby channels\n` +
+            `🎭 All roles stripped from all players\n\n` +
+            `Run \`/open\` to start a new registration.`
+          )
+          .setTimestamp()
+        ]
+      });
+
+    // ── CLEAR SPECIFIC LOBBY ─────────────────────────────────────────────────
+    } else {
+      const letter   = target; // 'A', 'B', etc.
+      const lc       = lobbyConf[letter];
+
+      // Remove teams assigned to this lobby
+      const removed = data.slots.filter(t => t.lobby === letter);
+      data.slots = data.slots.filter(t => t.lobby !== letter);
+      setRegistrations(interaction.guildId, data);
+
+      // Strip lobby role from removed teams
+      if (lc?.role_id) {
+        for (const team of removed) {
+          for (const playerId of [...new Set([team.captain_id, ...(team.players || [])])]) {
             try {
-              const m = await interaction.guild.members.fetch(playerId);
-              await m.roles.remove(lobbyConf[team.lobby].role_id).catch(() => {});
+              const member = await interaction.guild.members.fetch(playerId);
+              await member.roles.remove(lc.role_id).catch(() => {});
             } catch {}
           }
         }
       }
-    }
 
-    // ── CLEAR SINGLE LOBBY ────────────────────────────────────────────────────
-    if (choice.startsWith('clear_lobby_')) {
-      const letter = choice.replace('clear_lobby_', '');
-      const data   = getRegistrations(interaction.guildId);
+      // Purge the lobby's private channel
+      let lobbyDeleted = 0;
+      if (lc?.channel_id) {
+        lobbyDeleted = await purgeChannel(interaction.guild, lc.channel_id);
+      }
 
-      // Find teams in this lobby
-      const lobbyTeams   = data.slots.filter(t => t.lobby === letter);
-      const remainSlots  = data.slots.filter(t => t.lobby !== letter);
-
-      // Strip lobby role from removed teams
-      await stripRoles(lobbyTeams);
-
-      // Clear their slot assignment but keep them in the queue as unassigned
-      // (or remove them completely — here we remove from slots entirely)
-      data.slots = remainSlots;
-      setRegistrations(interaction.guildId, data);
-
-      // Clear in-memory message ID for this lobby so a fresh embed posts
-      // Set to null explicitly — merge-based set would re-add deleted keys
+      // Clear stored message ID for this lobby
       setPersistentSlotListId(interaction.guildId, { [`lobby_${letter}`]: null });
 
-      // Clear the lobby's channel messages
-      const lc = lobbyConf[letter];
-      if (lc?.channel_id) await purgeChannel(lc.channel_id);
-
       // Post fresh empty slot list in lobby channel
-      if (lc?.channel_id) {
-        await postToLobbyChannel(interaction.guild, letter, lobbyConf, settings, data);
-      }
+      await postFreshLobbySlotList(interaction.guild, letter, lobbyConf, settings);
 
       return interaction.editReply({
-        embeds: [successEmbed(
-          `Lobby ${letter} Cleared`,
-          `**${lobbyTeams.length}** team(s) removed from Lobby ${letter}.\n` +
-          `Lobby roles stripped. Slot list reset.`
-        )],
-        components: [],
-      });
-    }
-
-    // ── CLEAR ALL ─────────────────────────────────────────────────────────────
-    if (choice === 'clear_all') {
-      const data    = getRegistrations(interaction.guildId);
-      const allTeams = [...data.slots, ...data.waitlist];
-
-      await stripRoles(allTeams);
-
-      clearRegistrations(interaction.guildId);
-      clearMatches(interaction.guildId);
-      setServer(interaction.guildId, { registration_open: false });
-      clearPersistentSlotListIds(interaction.guildId);
-
-      // Purge all channels
-      const lobbyChannelIds = lobbyLetters.map(l => lobbyConf[l]?.channel_id).filter(Boolean);
-      const allChannels = [...new Set([
-        config.register_channel,
-        config.slotlist_channel,
-        config.waitlist_channel,
-        ...lobbyChannelIds,
-      ].filter(Boolean))];
-
-      for (const chId of allChannels) await purgeChannel(chId);
-
-      // Post fresh empty slot lists in all configured lobby channels
-      const freshData = getRegistrations(interaction.guildId);
-      for (const letter of lobbyLetters) {
-        if (!lobbyConf[letter]?.channel_id) continue;
-        await postToLobbyChannel(interaction.guild, letter, lobbyConf, settings, freshData);
-      }
-
-      return interaction.editReply({
-        embeds: [successEmbed(
-          'All Cleared',
-          `**${allTeams.length}** team(s) removed.\n` +
-          `All channels cleared. Fresh slot lists posted.\n` +
-          `Run \`/open\` to start a new registration.`
-        )],
-        components: [],
+        embeds: [new EmbedBuilder()
+          .setColor(0xFFAA00)
+          .setTitle(`🏟️ CLEARED — LOBBY ${letter}`)
+          .setDescription(
+            `✅ **${removed.length}** teams unassigned from Lobby ${letter}\n` +
+            `🧹 Lobby channel: **${lobbyDeleted}** messages deleted\n` +
+            `📋 Fresh slot list posted in Lobby ${letter} channel\n` +
+            `🎭 Lobby ${letter} role stripped from affected players`
+          )
+          .setTimestamp()
+        ]
       });
     }
   }
