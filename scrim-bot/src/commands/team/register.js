@@ -86,6 +86,8 @@ module.exports = {
         } catch {}
       }
 
+
+
       // ── Public confirmation in registration channel ───────────────────────
       if (config.register_channel) {
         try {
