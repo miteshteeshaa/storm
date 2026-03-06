@@ -29,11 +29,13 @@ function getAuth() {
 
       console.log('✅ Using GOOGLE_CREDENTIALS_JSON — email:', creds.client_email);
 
-      // Use GoogleAuth with credentials object — more robust than JWT directly
-      return new google.auth.GoogleAuth({
-        credentials: creds,
+      // Use JWT directly — more explicit and reliable than GoogleAuth for service accounts
+      return new google.auth.JWT(
+        creds.client_email,
+        null,
+        creds.private_key,
         scopes,
-      });
+      );
     } catch (e) {
       console.error('❌ Failed to parse GOOGLE_CREDENTIALS_JSON:', e.message);
     }
