@@ -395,31 +395,36 @@ async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, 
   await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
 
-// ── Setup an existing spreadsheet shared with the service account ─────────────
+// ── Create a new spreadsheet via Drive API (works for service accounts) ───────
+async function driveCreateSpreadsheet(auth, title) {
+  const drive = google.drive({ version: 'v3', auth });
+  const res   = await drive.files.create({
+    requestBody: {
+      name:     title,
+      mimeType: 'application/vnd.google-apps.spreadsheet',
+    },
+    fields: 'id',
+  });
+  return res.data.id;
+}
+
+// ── Create and set up a new scrim sheet per server ────────────────────────────
 async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = ['A','B','C','D'], numMatches = 150) {
   const auth   = getAuth();
   const sheets = google.sheets({ version:'v4', auth });
 
-  const spreadsheetId = process.env.SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error('SPREADSHEET_ID env var not set. Create a Google Sheet, share it with the service account email, and add SPREADSHEET_ID to Railway variables.');
+  // Create a fresh sheet via Drive API (service accounts CAN do this)
+  const spreadsheetId = await driveCreateSpreadsheet(auth, `${scrimName} — SCRIM SHEET`);
 
-  // 1. Get existing sheet metadata
-  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  // 1. Get the auto-created "Sheet1" tab metadata
+  const meta           = await sheets.spreadsheets.get({ spreadsheetId });
   const existingSheets = meta.data.sheets;
   const existingTitles = existingSheets.map(s => s.properties.title);
   const neededTitles   = lobbyLetters.map(l => `Lobby ${l}`);
 
   const requests = [];
 
-  // Rename spreadsheet title
-  requests.push({
-    updateSpreadsheetProperties: {
-      properties: { title: `${scrimName} — SCRIM SHEET` },
-      fields: 'title',
-    },
-  });
-
-  // Rename first sheet to "Lobby A" if needed
+  // Rename the default "Sheet1" to "Lobby A"
   const firstSheet = existingSheets[0];
   if (firstSheet && !existingTitles.includes('Lobby A')) {
     requests.push({
@@ -430,18 +435,20 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
     });
   }
 
-  // Add any missing lobby tabs
+  // Add remaining lobby tabs (B, C, D, …)
   for (const title of neededTitles) {
-    const renamed = title === 'Lobby A' && !existingTitles.includes('Lobby A');
-    if (!existingTitles.includes(title) && !renamed) {
+    const alreadyFirst = title === 'Lobby A' && !existingTitles.includes('Lobby A');
+    if (!existingTitles.includes(title) && !alreadyFirst) {
       requests.push({ addSheet: { properties: { title } } });
     }
   }
 
-  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+  if (requests.length > 0) {
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+  }
 
   // 2. Re-fetch to get updated sheetIds
-  const updated = await sheets.spreadsheets.get({ spreadsheetId });
+  const updated      = await sheets.spreadsheets.get({ spreadsheetId });
   const updatedSheets = updated.data.sheets;
 
   // 3. Per-lobby: write values → format → formulas
