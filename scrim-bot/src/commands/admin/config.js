@@ -27,7 +27,7 @@ const ROLE_FIELDS = {
 
 function buildStepMenu(settings) {
   const numLobbies = settings.lobbies || 4;
-  const lobbyOptions = ['A','B','C','D','E','F'].slice(0, numLobbies).flatMap(l => [
+  const lobbyOptions = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies).flatMap(l => [
     { label: `Lobby ${l} - Channel`, value: `lobby_channel_${l}`, description: `Private channel for Lobby ${l}` },
     { label: `Lobby ${l} - Role`,    value: `lobby_role_${l}`,    description: `Role for Lobby ${l} access` },
   ]);
@@ -78,7 +78,7 @@ function buildConfigEmbed(config, settings, lobbyConf) {
   const ro = id => id ? `<@&${id}>` : '`Not Set`';
   const numLobbies    = settings.lobbies || 4;
   const slotsPerLobby = settings.slots_per_lobby || 24;
-  const lobbyLetters  = ['A','B','C','D','E','F'].slice(0, numLobbies);
+  const lobbyLetters  = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
 
   const lobbyLines = lobbyLetters.map(l => {
     const lc = lobbyConf[l] || {};
