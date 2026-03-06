@@ -13,37 +13,46 @@ function getAuth() {
   // Support GOOGLE_CREDENTIALS_JSON (paste entire service account JSON as one env var)
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     try {
-      const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-      // Normalize key in case Railway mangled \n inside the JSON value
+      let raw = process.env.GOOGLE_CREDENTIALS_JSON.trim();
+
+      // Railway sometimes wraps the value in quotes — strip them
+      if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+        raw = raw.slice(1, -1);
+      }
+
+      const creds = JSON.parse(raw);
+
+      // Normalize private key newlines (Railway can mangle \n inside JSON values)
       if (creds.private_key) {
         creds.private_key = creds.private_key.replace(/\\n/g, '\n');
       }
+
       console.log('✅ Using GOOGLE_CREDENTIALS_JSON — email:', creds.client_email);
-      return new google.auth.JWT(creds.client_email, null, creds.private_key, scopes);
+
+      // Use GoogleAuth with credentials object — more robust than JWT directly
+      return new google.auth.GoogleAuth({
+        credentials: creds,
+        scopes,
+      });
     } catch (e) {
-      console.error('Failed to parse GOOGLE_CREDENTIALS_JSON:', e.message);
+      console.error('❌ Failed to parse GOOGLE_CREDENTIALS_JSON:', e.message);
     }
   }
 
-  // Support both GOOGLE_SERVICE_ACCOUNT_EMAIL (Railway) and GOOGLE_SERVICE_EMAIL
+  // Fallback: support GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_EMAIL || '';
+  let key     = process.env.GOOGLE_PRIVATE_KEY || '';
 
-  // Support GOOGLE_PRIVATE_KEY — handle all Railway/copy-paste formats
-  let key = process.env.GOOGLE_PRIVATE_KEY || '';
-
-  // Strip surrounding quotes if present
   if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
     key = key.slice(1, -1);
   }
-
-  // Replace literal \n sequences with real newlines (Railway stores keys this way)
   key = key.replace(/\\n/g, '\n');
 
-  // Final check — if no newlines at all, the key is malformed; log a warning
   if (key && !key.includes('\n')) {
-    console.warn('⚠️  GOOGLE_PRIVATE_KEY has no newlines — it may be malformed. Check Railway env var format.');
+    console.warn('⚠️  GOOGLE_PRIVATE_KEY has no newlines — it may be malformed.');
   }
 
+  console.log('✅ Using GOOGLE_SERVICE_ACCOUNT_EMAIL — email:', email);
   return new google.auth.JWT(email, null, key, scopes);
 }
 
