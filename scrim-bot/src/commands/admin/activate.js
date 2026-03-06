@@ -8,9 +8,29 @@ module.exports = {
     .setDescription('Activate the scrim bot for this server (Admin only)'),
 
   async execute(interaction) {
+    // Guard: ensure guild is available
+    if (!interaction.guild) {
+      return interaction.reply({
+        embeds: [errorEmbed('Error', 'This command must be used in a server.')],
+        ephemeral: true
+      });
+    }
+
+    // Fetch full guild if needed (ensures ownerId is available)
+    const guild = interaction.guild.partial
+      ? await interaction.guild.fetch().catch(() => null)
+      : interaction.guild;
+
+    if (!guild) {
+      return interaction.reply({
+        embeds: [errorEmbed('Error', 'Could not fetch server information.')],
+        ephemeral: true
+      });
+    }
+
     // Only server owner or Administrator can activate
     if (
-      interaction.guild.ownerId !== interaction.user.id &&
+      guild.ownerId !== interaction.user.id &&
       !interaction.member.permissions.has('Administrator')
     ) {
       return interaction.reply({
