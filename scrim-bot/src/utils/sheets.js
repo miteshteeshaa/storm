@@ -14,6 +14,11 @@ function getAuth() {
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     try {
       const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+      // Normalize key in case Railway mangled \n inside the JSON value
+      if (creds.private_key) {
+        creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+      }
+      console.log('✅ Using GOOGLE_CREDENTIALS_JSON — email:', creds.client_email);
       return new google.auth.JWT(creds.client_email, null, creds.private_key, scopes);
     } catch (e) {
       console.error('Failed to parse GOOGLE_CREDENTIALS_JSON:', e.message);
