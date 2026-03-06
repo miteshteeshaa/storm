@@ -399,26 +399,42 @@ async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, 
 async function driveCreateSpreadsheet(auth, title) {
   const drive      = google.drive({ version: 'v3', auth });
   const folderId   = process.env.GOOGLE_DRIVE_FOLDER_ID;
+  const ownerEmail = process.env.DRIVE_OWNER_EMAIL; // your Gmail — transfers ownership so quota hits YOUR account
 
-  if (!folderId) throw new Error(
-    'GOOGLE_DRIVE_FOLDER_ID is not set.\n\n' +
-    'To fix:\n' +
-    '1. In Google Drive, create a folder for your scrim sheets\n' +
-    '2. Share it with storm-bot@storm-bot-489403.iam.gserviceaccount.com (Editor)\n' +
-    '3. Copy the folder ID from the URL (the long string after /folders/)\n' +
-    '4. Add GOOGLE_DRIVE_FOLDER_ID=<that_id> to your Railway variables'
-  );
+  if (!folderId) throw new Error('GOOGLE_DRIVE_FOLDER_ID is not set.');
 
+  // Create the file
   const res = await drive.files.create({
     requestBody: {
       name:     title,
       mimeType: 'application/vnd.google-apps.spreadsheet',
-      parents:  [folderId],   // created in YOUR Drive folder, not the service account's
+      parents:  [folderId],
     },
-    fields:             'id',
-    supportsAllDrives:  true,  // needed if folderId is inside a Shared Drive
+    fields:            'id',
+    supportsAllDrives: true,
   });
-  return res.data.id;
+  const fileId = res.data.id;
+
+  // Transfer ownership to your Gmail so quota counts against YOUR account, not the service account's
+  if (ownerEmail) {
+    try {
+      await drive.permissions.create({
+        fileId,
+        transferOwnership: true,
+        requestBody: {
+          role:         'owner',
+          type:         'user',
+          emailAddress: ownerEmail,
+        },
+      });
+      console.log('✅ Ownership transferred to', ownerEmail);
+    } catch (e) {
+      // Ownership transfer fails for non-Workspace accounts — file still works fine
+      console.warn('⚠️ Could not transfer ownership:', e.message);
+    }
+  }
+
+  return fileId;
 }
 
 // ── Create and set up a new scrim sheet per server ────────────────────────────
