@@ -134,6 +134,8 @@ module.exports = {
             const lobbyEmojis = ['🅐','🅑','🅒','🅓','🅔','🅕','🅖','🅗','🅘','🅙'].slice(0, numLobbies);
             for (const e of lobbyEmojis) {
               try { await msg.react(e); } catch {}
+              await new Promise(r => setTimeout(r, 300)); // avoid rate limit
+            }
             // ❌ added by reactionHandler after slot is assigned
             }
           }
