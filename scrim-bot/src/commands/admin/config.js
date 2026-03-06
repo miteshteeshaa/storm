@@ -28,37 +28,45 @@ const ROLE_FIELDS = {
 function buildStepMenu(settings) {
   const numLobbies = settings.lobbies || 4;
   const lobbyOptions = ['A','B','C','D','E','F'].slice(0, numLobbies).flatMap(l => [
-    { label: `🏟️ Lobby ${l} — Channel`, value: `lobby_channel_${l}`, description: `Set the private channel for Lobby ${l}` },
-    { label: `🎭 Lobby ${l} — Role`,    value: `lobby_role_${l}`,    description: `Set the role for Lobby ${l} access` },
+    { label: `Lobby ${l} - Channel`, value: `lobby_channel_${l}`, description: `Private channel for Lobby ${l}` },
+    { label: `Lobby ${l} - Role`,    value: `lobby_role_${l}`,    description: `Role for Lobby ${l} access` },
   ]);
 
-  return new ActionRowBuilder().addComponents(
+  const mainMenu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId('config_step')
-      .setPlaceholder('⚙️ What do you want to configure?')
+      .setPlaceholder('General Settings')
       .addOptions([
-        { label: '🏆 Scrim Name',              value: 'scrim_name',          description: 'Name of the scrim event' },
-        { label: '🏟️ Number of Lobbies',       value: 'lobbies',             description: 'How many lobbies (A, B, C...)' },
-        { label: '🎯 Slots Per Lobby',          value: 'slots_per_lobby',     description: 'How many slots in EACH lobby (e.g. 24)' },
-        { label: '🔢 First Slot Number',        value: 'first_slot',          description: 'Starting slot number per lobby (usually 1)' },
-        { label: '📝 Registration Channel',    value: 'register_channel',    description: 'Where teams submit /register' },
-        { label: '🎯 Slot Allocation Channel',  value: 'slotlist_channel',    description: 'Where team cards are posted for admin' },
-        { label: '📋 Overall Slot List',        value: 'idpass_channel',      description: 'Shows all lobbies combined' },
-        { label: '⏳ Waitlist Channel',         value: 'waitlist_channel',    description: 'Waitlist channel' },
-        { label: '📊 Results Channel',          value: 'results_channel',     description: 'Results channel' },
-        { label: '🏆 Leaderboard Channel',      value: 'leaderboard_channel', description: 'Leaderboard channel' },
-        { label: '🛡️ Admin Channel',            value: 'admin_channel',       description: 'Admin channel' },
-        { label: '👑 Admin Role',               value: 'admin_role',          description: 'Who can use admin commands' },
-        { label: '✅ Registered Role',          value: 'registered_role',     description: 'Auto-given on registration' },
-        { label: '🎯 Slot Holder Role',         value: 'slot_role',           description: 'Given when registered' },
-        { label: '⏳ Waitlist Role',            value: 'waitlist_role',       description: 'Given to waitlisted teams' },
-        { label: '📋 Google Sheet URL',         value: 'sheet_url',           description: 'Link to Google Sheet' },
-        ...lobbyOptions,
-        { label: '📦 View Current Config',      value: 'view_config',         description: 'See full configuration' },
+        { label: 'Scrim Name',              value: 'scrim_name',          description: 'Name of the scrim event' },
+        { label: 'Number of Lobbies',       value: 'lobbies',             description: 'How many lobbies (A, B, C...)' },
+        { label: 'Slots Per Lobby',         value: 'slots_per_lobby',     description: 'How many slots in EACH lobby (e.g. 24)' },
+        { label: 'First Slot Number',       value: 'first_slot',          description: 'Starting slot number per lobby' },
+        { label: 'Registration Channel',    value: 'register_channel',    description: 'Where teams submit /register' },
+        { label: 'Slot Allocation Channel', value: 'slotlist_channel',    description: 'Where team cards are posted for admin' },
+        { label: 'Overall Slot List',       value: 'idpass_channel',      description: 'Shows all lobbies combined' },
+        { label: 'Waitlist Channel',        value: 'waitlist_channel',    description: 'Waitlist channel' },
+        { label: 'Results Channel',         value: 'results_channel',     description: 'Results channel' },
+        { label: 'Leaderboard Channel',     value: 'leaderboard_channel', description: 'Leaderboard channel' },
+        { label: 'Admin Channel',           value: 'admin_channel',       description: 'Admin channel' },
+        { label: 'Admin Role',              value: 'admin_role',          description: 'Who can use admin commands' },
+        { label: 'Registered Role',         value: 'registered_role',     description: 'Auto-given on registration' },
+        { label: 'Slot Holder Role',        value: 'slot_role',           description: 'Given when registered' },
+        { label: 'Waitlist Role',           value: 'waitlist_role',       description: 'Given to waitlisted teams' },
+        { label: 'Google Sheet URL',        value: 'sheet_url',           description: 'Link to Google Sheet' },
+        { label: 'Results Template Image',   value: 'results_template',    description: 'Upload background image for /results' },
+        { label: 'View Current Config',     value: 'view_config',         description: 'See full configuration' },
       ])
   );
-}
 
+  const lobbyMenu = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId('config_step')
+      .setPlaceholder('Lobby Channels & Roles')
+      .addOptions(lobbyOptions)
+  );
+
+  return [mainMenu, lobbyMenu];
+}
 function buildBackRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('config_back').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
@@ -137,7 +145,7 @@ module.exports = {
     const { config, settings, lobbyConf } = fresh();
     const msg = await interaction.reply({
       embeds: [buildConfigEmbed(config, settings, lobbyConf)],
-      components: [buildStepMenu(settings)],
+      components: [...buildStepMenu(settings)],
       ephemeral: true,
       fetchReply: true,
     });
@@ -175,12 +183,12 @@ module.exports = {
         catch { try { await msg.edit({ components: [] }); } catch {} return; }
         if (j.customId === 'config_back') {
           const r = fresh();
-          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
           continue;
         }
         setLobbyConfig(interaction.guildId, { [letter]: { ...getLobbyConfig(interaction.guildId)[letter], channel_id: j.values[0] } });
         const r = fresh();
-        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
       // ── Lobby role ───────────────────────────────────────────────────────
       } else if (value.startsWith('lobby_role_')) {
@@ -201,12 +209,12 @@ module.exports = {
         catch { try { await msg.edit({ components: [] }); } catch {} return; }
         if (j.customId === 'config_back') {
           const r = fresh();
-          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
           continue;
         }
         setLobbyConfig(interaction.guildId, { [letter]: { ...getLobbyConfig(interaction.guildId)[letter], role_id: j.values[0] } });
         const r = fresh();
-        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
       // ── Scrim settings modals ────────────────────────────────────────────
       } else if (['scrim_name','lobbies','slots_per_lobby','first_slot'].includes(value)) {
@@ -236,7 +244,7 @@ module.exports = {
           setScrimSettings(interaction.guildId, { [value]: raw });
         }
         const r = fresh();
-        await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+        await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
       // ── Channel picker ───────────────────────────────────────────────────
       } else if (CHANNEL_FIELDS[value]) {
@@ -256,12 +264,12 @@ module.exports = {
         catch { try { await msg.edit({ components: [] }); } catch {} return; }
         if (j.customId === 'config_back') {
           const r = fresh();
-          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
           continue;
         }
         setConfig(interaction.guildId, { [pf]: j.values[0] });
         const r = fresh();
-        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
       // ── Role picker ──────────────────────────────────────────────────────
       } else if (ROLE_FIELDS[value]) {
@@ -280,12 +288,47 @@ module.exports = {
         catch { try { await msg.edit({ components: [] }); } catch {} return; }
         if (j.customId === 'config_back') {
           const r = fresh();
-          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+          await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
           continue;
         }
         setConfig(interaction.guildId, { [pf]: j.values[0] });
         const r = fresh();
-        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+        await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+
+      // ── Results template upload ─────────────────────────────────────────
+      } else if (value === 'results_template') {
+        await i.update({
+          embeds: [],
+          components: [],
+          content: '📤 **Upload your results template image** (PNG/JPG, 1920x1080)\nSend it as a message attachment in this channel within 60 seconds.',
+        });
+        try {
+          const collected = await interaction.channel.awaitMessages({
+            filter: m => m.author.id === interaction.user.id && m.attachments.size > 0,
+            max: 1, time: 60_000, errors: ['time'],
+          });
+          const attachment = collected.first().attachments.first();
+          const { default: fetch } = require('node-fetch');
+          const { createWriteStream, mkdirSync } = require('fs');
+          const templateDir = process.env.DATA_DIR || '/data';
+          mkdirSync(templateDir, { recursive: true });
+          const savePath = `${templateDir}/results_template_${interaction.guildId}.png`;
+          const res = await fetch(attachment.url);
+          await new Promise((resolve, reject) => {
+            const stream = createWriteStream(savePath);
+            res.body.pipe(stream);
+            stream.on('finish', resolve);
+            stream.on('error', reject);
+          });
+          setConfig(interaction.guildId, { results_template_path: savePath });
+          await collected.first().delete().catch(() => {});
+          const r = fresh();
+          await interaction.editReply({ content: null, embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+        } catch {
+          const r = fresh();
+          await interaction.editReply({ content: null, embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+        }
+        continue;
 
       // ── Sheet URL modal ──────────────────────────────────────────────────
       } else if (value === 'sheet_url') {
@@ -302,12 +345,12 @@ module.exports = {
         catch { continue; }
         setConfig(interaction.guildId, { sheet_url: m.fields.getTextInputValue('sheet_url_input') });
         const r = fresh();
-        await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+        await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
       // ── View / Back ──────────────────────────────────────────────────────
       } else {
         const r = fresh();
-        await i.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [buildStepMenu(r.settings)] });
+        await i.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
       }
     }
   },
