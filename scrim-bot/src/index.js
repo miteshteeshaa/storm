@@ -71,6 +71,29 @@ process.on('uncaughtException', (err) => {
   console.error('⚠️ Uncaught Exception:', err?.message || err);
 });
 
+// ─── Auto-sync sheet every 20 minutes ────────────────────────────────────────
+const { getConfig: _getConfig, getRegistrations: _getRegs } = require('./utils/database');
+const { syncTeamsToSheet: _syncSheet } = require('./utils/sheets');
+
+async function autoSyncAllGuilds() {
+  for (const [guildId] of client.guilds.cache) {
+    try {
+      const cfg  = _getConfig(guildId);
+      if (!cfg.spreadsheet_id) continue;
+      const data = _getRegs(guildId);
+      if (!data.slots || data.slots.length === 0) continue;
+      await _syncSheet(cfg.spreadsheet_id, data.slots);
+      console.log(`🔄 Auto-synced sheet for guild ${guildId}`);
+    } catch (err) {
+      console.error(`⚠️ Auto-sync failed for guild ${guildId}:`, err.message);
+    }
+  }
+}
+
+setInterval(() => {
+  autoSyncAllGuilds().catch(err => console.error('⚠️ Auto-sync interval error:', err.message));
+}, 20 * 60 * 1000); // every 20 minutes
+
 // ─── Login ────────────────────────────────────────────────────────────────────
 console.log('🔑 Attempting Discord login...');
 client.login(process.env.DISCORD_TOKEN).catch(err => {
