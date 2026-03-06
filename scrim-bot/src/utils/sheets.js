@@ -4,22 +4,38 @@
 const { google } = require('googleapis');
 
 function getAuth() {
-  // Handles all common Railway/Render/Docker env var key formats
-  let key = process.env.GOOGLE_PRIVATE_KEY || '';
-  // Strip surrounding quotes if any
-  if (key.startsWith('"') && key.endsWith('"')) key = key.slice(1, -1);
-  // Replace literal \n escape sequences with real newlines
-  key = key.replace(/\\n/g, '\n');
-  // If still no PEM header, try base64 decode (some platforms encode it)
-  if (key && !key.includes('-----BEGIN')) {
-    try { key = Buffer.from(key, 'base64').toString('utf8'); } catch {}
+  const scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'];
+
+  // Support GOOGLE_CREDENTIALS_JSON (paste entire service account JSON as one env var)
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    try {
+      const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+      return new google.auth.JWT(creds.client_email, null, creds.private_key, scopes);
+    } catch (e) {
+      console.error('Failed to parse GOOGLE_CREDENTIALS_JSON:', e.message);
+    }
   }
-  return new google.auth.JWT(
-    process.env.GOOGLE_SERVICE_EMAIL,
-    null,
-    key,
-    ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-  );
+
+  // Support both GOOGLE_SERVICE_ACCOUNT_EMAIL (Railway) and GOOGLE_SERVICE_EMAIL
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_EMAIL || '';
+
+  // Support GOOGLE_PRIVATE_KEY — handle all Railway/copy-paste formats
+  let key = process.env.GOOGLE_PRIVATE_KEY || '';
+
+  // Strip surrounding quotes if present
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1);
+  }
+
+  // Replace literal \n sequences with real newlines (Railway stores keys this way)
+  key = key.replace(/\\n/g, '\n');
+
+  // Final check — if no newlines at all, the key is malformed; log a warning
+  if (key && !key.includes('\n')) {
+    console.warn('⚠️  GOOGLE_PRIVATE_KEY has no newlines — it may be malformed. Check Railway env var format.');
+  }
+
+  return new google.auth.JWT(email, null, key, scopes);
 }
 
 function ordinal(n) {
