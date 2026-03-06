@@ -4,11 +4,20 @@
 const { google } = require('googleapis');
 
 function getAuth() {
-  const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  // Handles all common Railway/Render/Docker env var key formats
+  let key = process.env.GOOGLE_PRIVATE_KEY || '';
+  // Strip surrounding quotes if any
+  if (key.startsWith('"') && key.endsWith('"')) key = key.slice(1, -1);
+  // Replace literal \n escape sequences with real newlines
+  key = key.replace(/\\n/g, '\n');
+  // If still no PEM header, try base64 decode (some platforms encode it)
+  if (key && !key.includes('-----BEGIN')) {
+    try { key = Buffer.from(key, 'base64').toString('utf8'); } catch {}
+  }
   return new google.auth.JWT(
     process.env.GOOGLE_SERVICE_EMAIL,
     null,
-    privateKey,
+    key,
     ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
   );
 }
