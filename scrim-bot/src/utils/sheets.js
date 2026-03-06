@@ -395,52 +395,73 @@ async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, 
   await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
 
-// ── Create a new spreadsheet: one tab per lobby, numMatches match columns ─────
+// ── Setup an existing spreadsheet shared with the service account ─────────────
 async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = ['A','B','C','D'], numMatches = 150) {
   const auth   = getAuth();
   const sheets = google.sheets({ version:'v4', auth });
-  const drive  = google.drive({ version:'v3', auth });
 
-  // 1. Create spreadsheet
-  const create = await sheets.spreadsheets.create({
-    requestBody: {
+  const spreadsheetId = process.env.SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('SPREADSHEET_ID env var not set. Create a Google Sheet, share it with the service account email, and add SPREADSHEET_ID to Railway variables.');
+
+  // 1. Get existing sheet metadata
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const existingSheets = meta.data.sheets;
+  const existingTitles = existingSheets.map(s => s.properties.title);
+  const neededTitles   = lobbyLetters.map(l => `Lobby ${l}`);
+
+  const requests = [];
+
+  // Rename spreadsheet title
+  requests.push({
+    updateSpreadsheetProperties: {
       properties: { title: `${scrimName} — SCRIM SHEET` },
-      sheets: lobbyLetters.map(l => ({ properties: { title: `Lobby ${l}` } })),
+      fields: 'title',
     },
   });
 
-  const spreadsheetId = create.data.spreadsheetId;
-  const sheetMeta     = create.data.sheets;
-
-  // 2. Anyone with link can EDIT — wrapped in try/catch since Drive API permissions
-  //    can fail if the API is still propagating; sheet still works without this
-  try {
-    await drive.permissions.create({
-      fileId: spreadsheetId,
-      requestBody: { role:'writer', type:'anyone' },
+  // Rename first sheet to "Lobby A" if needed
+  const firstSheet = existingSheets[0];
+  if (firstSheet && !existingTitles.includes('Lobby A')) {
+    requests.push({
+      updateSheetProperties: {
+        properties: { sheetId: firstSheet.properties.sheetId, title: 'Lobby A' },
+        fields: 'title',
+      },
     });
-  } catch (permErr) {
-    console.warn('⚠️ Could not set public permissions (Drive API):', permErr.message);
-    console.warn('   Sheet created successfully — share it manually if needed.');
-    // Don't throw — sheet was created, just not publicly shared yet
   }
 
-  // 3. Per-lobby: write values → format → formulas
-  for (let idx = 0; idx < lobbyLetters.length; idx++) {
-    const sheetId    = sheetMeta[idx].properties.sheetId;
-    const sheetTitle = sheetMeta[idx].properties.title;
+  // Add any missing lobby tabs
+  for (const title of neededTitles) {
+    const renamed = title === 'Lobby A' && !existingTitles.includes('Lobby A');
+    if (!existingTitles.includes(title) && !renamed) {
+      requests.push({ addSheet: { properties: { title } } });
+    }
+  }
 
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+
+  // 2. Re-fetch to get updated sheetIds
+  const updated = await sheets.spreadsheets.get({ spreadsheetId });
+  const updatedSheets = updated.data.sheets;
+
+  // 3. Per-lobby: write values → format → formulas
+  for (const letter of lobbyLetters) {
+    const title     = `Lobby ${letter}`;
+    const sheetMeta = updatedSheets.find(s => s.properties.title === title);
+    if (!sheetMeta) { console.warn(`⚠️ Tab "${title}" not found — skipping`); continue; }
+
+    const sheetId   = sheetMeta.properties.sheetId;
     const valueRows = buildValueRows(slotsPerLobby, numMatches);
 
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetTitle}!A1`,
+      range: `${title}!A1`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: valueRows },
     });
 
     await formatLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
-    await writeLobbyFormulas(sheets, spreadsheetId, sheetTitle, slotsPerLobby, numMatches);
+    await writeLobbyFormulas(sheets, spreadsheetId, title, slotsPerLobby, numMatches);
     await protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
   }
 
