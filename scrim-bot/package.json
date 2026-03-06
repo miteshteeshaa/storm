@@ -10,7 +10,7 @@
   "dependencies": {
     "discord.js": "^14.14.1",
     "googleapis": "^140.0.0",
-    "canvas": "^2.11.2",
+    "canvas": "^3.0.0",
     "dotenv": "^16.4.5"
   },
   "engines": {
