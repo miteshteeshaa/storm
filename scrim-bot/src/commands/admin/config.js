@@ -8,6 +8,11 @@ const { getConfig, setConfig, getScrimSettings, setScrimSettings, getLobbyConfig
 const { errorEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 
+function extractSheetId(url) {
+  const m = (url || '').match(/\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : null;
+}
+
 const CHANNEL_FIELDS = {
   register_channel:    'Registration Channel',
   slotlist_channel:    'Slot Allocation Channel',
@@ -53,6 +58,7 @@ function buildStepMenu(settings) {
         { label: 'Slot Holder Role',        value: 'slot_role',           description: 'Given when registered' },
         { label: 'Waitlist Role',           value: 'waitlist_role',       description: 'Given to waitlisted teams' },
         { label: 'Google Sheet URL',        value: 'sheet_url',           description: 'Link to Google Sheet' },
+        { label: '🔄 Reset Sheet Link',     value: 'reset_sheet',         description: 'Clear sheet link so /link generates a new one' },
         { label: 'Results Template Image',   value: 'results_template',    description: 'Upload background image for /results' },
         { label: 'View Current Config',     value: 'view_config',         description: 'See full configuration' },
       ])
@@ -330,6 +336,17 @@ module.exports = {
         }
         continue;
 
+      // ── Reset Sheet Link ──────────────────────────────────────────────────
+      } else if (value === 'reset_sheet') {
+        setConfig(interaction.guildId, { sheet_url: null, spreadsheet_id: null });
+        const r = fresh();
+        await i.update({
+          content: '✅ Sheet link cleared. Use `/link` to generate a new sheet.',
+          embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)],
+          components: [...buildStepMenu(r.settings)],
+        });
+        continue;
+
       // ── Sheet URL modal ──────────────────────────────────────────────────
       } else if (value === 'sheet_url') {
         await i.showModal(
@@ -343,7 +360,7 @@ module.exports = {
         let m;
         try { m = await interaction.awaitModalSubmit({ filter: x => x.customId === 'config_sheet_modal' && x.user.id === interaction.user.id, time: 120_000 }); }
         catch { continue; }
-        setConfig(interaction.guildId, { sheet_url: m.fields.getTextInputValue('sheet_url_input') });
+        setConfig(interaction.guildId, { sheet_url: m.fields.getTextInputValue('sheet_url_input'), spreadsheet_id: extractSheetId(m.fields.getTextInputValue('sheet_url_input')) });
         const r = fresh();
         await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
