@@ -257,18 +257,6 @@ const clearCmd = {
       // Fresh slot lists
       for (const l of lobbyLetters) await postFreshLobbySlotList(interaction.guild, l, lobbyConf, settings);
 
-      const overallCh = config.idpass_channel;
-      if (overallCh && overallCh !== config.slotlist_channel) {
-        try {
-          const ch  = await interaction.guild.channels.fetch(overallCh);
-          const ids = getPersistentSlotListId(interaction.guildId);
-          if (ids.overall) { try { const old = await ch.messages.fetch(ids.overall); await old.unpin().catch(() => {}); await old.delete().catch(() => {}); } catch {} }
-          const msg = await ch.send({ embeds: [buildPersistentSlotList([], settings)] });
-          try { await msg.pin(); } catch {}
-          setPersistentSlotListId(interaction.guildId, { overall: msg.id });
-        } catch {}
-      }
-
       return interaction.editReply({
         embeds: [new EmbedBuilder()
           .setColor(0x00FF7F).setTitle('🗑️ CLEARED — ALL')
