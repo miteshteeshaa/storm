@@ -369,15 +369,6 @@ async function syncSheet(guild, config, data) {
 async function refreshAllSlotLists(guild, config, settings, lobbyConf, data) {
   const ids = getPersistentSlotListId(guild.id);
 
-  const overallChannelId = config.idpass_channel || config.slotlist_channel;
-  if (overallChannelId && ids.overall) {
-    try {
-      const ch  = await guild.channels.fetch(overallChannelId);
-      const msg = await ch.messages.fetch(ids.overall);
-      await msg.edit({ embeds: [buildPersistentSlotList(data.slots, settings)] });
-    } catch {}
-  }
-
   const lobbyLetters = ['A','B','C','D','E','F'].slice(0, settings.lobbies || 4);
   for (const letter of lobbyLetters) {
     const lc     = lobbyConf[letter];
