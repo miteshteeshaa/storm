@@ -204,4 +204,68 @@ function ordinal(n) {
   return (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-module.exports = { createServerSheet, syncTeamsToSheet, clearTeamsFromSheet };
+
+
+// ── Read final standings from sheet ───────────────────────────────────────────
+// Reads col D (slot), E (team name), F (tag), and all match columns
+// Returns array of { slot, team_name, team_tag, placement_pts, kill_pts, total }
+async function getSheetStandings(spreadsheetId, slotsPerLobby = 24) {
+  const auth   = getAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  // Read the scoring table from A3:B27
+  const scoringRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Sheet1!A3:B26',
+  });
+  const scoringRows = scoringRes.data.values || [];
+  // Build placement pts map: index 0 = 1st place
+  const placementPts = scoringRows.map(r => parseInt(r[1]) || 0);
+
+  // Read team data + match data: D3 onwards
+  // Cols: D=slot, E=team_name, F=tag, G/H=match1 place/kills, I/J=match2...
+  const dataRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `Sheet1!D3:AJ${2 + slotsPerLobby}`,
+  });
+  const rows = dataRes.data.values || [];
+
+  const standings = [];
+  for (const row of rows) {
+    const slot     = parseInt(row[0]);
+    const teamName = row[1] || '';
+    const teamTag  = row[2] || '';
+
+    if (!teamName || teamName === '-') continue;
+
+    let totalPlacementPts = 0;
+    let totalKillPts      = 0;
+
+    // Match data starts at index 3 (col G), pairs of [place, kills]
+    for (let m = 0; m < 15; m++) {
+      const placeRaw = row[3 + m * 2];
+      const killsRaw = row[3 + m * 2 + 1];
+      if (!placeRaw || placeRaw === '') continue;
+
+      const place = parseInt(placeRaw);
+      const kills = parseInt(killsRaw) || 0;
+      if (!isNaN(place) && place >= 1 && place <= placementPts.length) {
+        totalPlacementPts += placementPts[place - 1];
+      }
+      totalKillPts += kills;
+    }
+
+    standings.push({
+      slot,
+      team_name:     teamName,
+      team_tag:      teamTag,
+      placement_pts: totalPlacementPts,
+      kill_pts:      totalKillPts,
+      total:         totalPlacementPts + totalKillPts,
+    });
+  }
+
+  return standings;
+}
+
+module.exports = { createServerSheet, syncTeamsToSheet, clearTeamsFromSheet, getSheetStandings };
