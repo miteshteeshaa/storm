@@ -19,7 +19,6 @@ const CHANNEL_FIELDS = {
   waitlist_channel:    'Waitlist Channel',
   results_channel:     'Results Channel',
   leaderboard_channel: 'Leaderboard Channel',
-  idpass_channel:      'Overall Slot List Channel',
   admin_channel:       'Admin Channel',
 };
 
@@ -48,7 +47,6 @@ function buildStepMenu(settings) {
         { label: 'First Slot Number',       value: 'first_slot',          description: 'Starting slot number per lobby' },
         { label: 'Registration Channel',    value: 'register_channel',    description: 'Where teams submit /register' },
         { label: 'Slot Allocation Channel', value: 'slotlist_channel',    description: 'Where team cards are posted for admin' },
-        { label: 'Overall Slot List',       value: 'idpass_channel',      description: 'Shows all lobbies combined' },
         { label: 'Waitlist Channel',        value: 'waitlist_channel',    description: 'Waitlist channel' },
         { label: 'Results Channel',         value: 'results_channel',     description: 'Results channel' },
         { label: 'Leaderboard Channel',     value: 'leaderboard_channel', description: 'Leaderboard channel' },
@@ -112,7 +110,6 @@ function buildConfigEmbed(config, settings, lobbyConf) {
         value: [
           `📝 Registration: ${ch(config.register_channel)}`,
           `🎯 Slot Allocation: ${ch(config.slotlist_channel)}`,
-          `📋 Overall Slot List: ${ch(config.idpass_channel)}`,
           `⏳ Waitlist: ${ch(config.waitlist_channel)}`,
           `📊 Results: ${ch(config.results_channel)}`,
           `🏆 Leaderboard: ${ch(config.leaderboard_channel)}`,
