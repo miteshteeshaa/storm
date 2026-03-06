@@ -397,13 +397,26 @@ async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, 
 
 // ── Create a new spreadsheet via Drive API (works for service accounts) ───────
 async function driveCreateSpreadsheet(auth, title) {
-  const drive = google.drive({ version: 'v3', auth });
-  const res   = await drive.files.create({
+  const drive      = google.drive({ version: 'v3', auth });
+  const folderId   = process.env.GOOGLE_DRIVE_FOLDER_ID;
+
+  if (!folderId) throw new Error(
+    'GOOGLE_DRIVE_FOLDER_ID is not set.\n\n' +
+    'To fix:\n' +
+    '1. In Google Drive, create a folder for your scrim sheets\n' +
+    '2. Share it with storm-bot@storm-bot-489403.iam.gserviceaccount.com (Editor)\n' +
+    '3. Copy the folder ID from the URL (the long string after /folders/)\n' +
+    '4. Add GOOGLE_DRIVE_FOLDER_ID=<that_id> to your Railway variables'
+  );
+
+  const res = await drive.files.create({
     requestBody: {
       name:     title,
       mimeType: 'application/vnd.google-apps.spreadsheet',
+      parents:  [folderId],   // created in YOUR Drive folder, not the service account's
     },
-    fields: 'id',
+    fields:             'id',
+    supportsAllDrives:  true,  // needed if folderId is inside a Shared Drive
   });
   return res.data.id;
 }
