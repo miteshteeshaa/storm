@@ -1,93 +1,77 @@
 // ── Results Image Generator ───────────────────────────────────────────────────
-// Uses canvas (node-canvas) to draw results onto the uploaded template image
+const { createCanvas, loadImage } = require('canvas');
 
-const { createCanvas, loadImage, registerFont } = require('canvas');
-const path = require('path');
-const fs   = require('fs');
-
-// Row midpoints on the 1262x920 template (detected from pixel analysis)
-const ROW_MIDS = [210, 261, 316, 369, 420, 476, 527, 579, 634, 686, 736, 788];
-const DIVIDER_X = 596;
+// Detected row midpoints for 1262x920 template (12 rows per side)
+const ROW_MIDS = [208, 260, 314, 366, 419, 473, 525, 578, 629, 683, 734, 786];
 
 // LEFT side x positions
 const L = {
-  slot:      58,
-  name:      102,
+  slot:      57,
+  name:      100,
   placement: 400,
-  kills:     492,
-  total:     548,
+  kills:     493,
+  total:     568,
 };
 
-// RIGHT side x positions  
+// RIGHT side x positions
 const R = {
-  slot:      650,
-  name:      700,
-  placement: 1005,
-  kills:     1093,
-  total:     1158,
+  slot:      672,
+  name:      717,
+  placement: 1015,
+  kills:     1108,
+  total:     1183,
 };
 
 /**
  * Generate results image
- * @param {string} templatePath - path to the template image file
- * @param {Array} teams - sorted array of { rank, team_name, team_tag, placement_pts, kill_pts, total }
- * @returns {Buffer} PNG image buffer
+ * @param {string} templatePath
+ * @param {Array} teams - sorted { rank, team_name, team_tag, placement_pts, kill_pts, total }
+ * @returns {Buffer} PNG buffer
  */
 async function generateResultsImage(templatePath, teams) {
   const template = await loadImage(templatePath);
   const canvas   = createCanvas(template.width, template.height);
   const ctx      = canvas.getContext('2d');
 
-  // Draw template background
   ctx.drawImage(template, 0, 0);
 
-  const slotsPerSide = Math.min(12, Math.ceil(teams.length / 2));
-  const leftTeams    = teams.slice(0, slotsPerSide);
-  const rightTeams   = teams.slice(slotsPerSide);
+  const count        = teams.length;
+  const leftCount    = Math.ceil(count / 2);
+  const leftTeams    = teams.slice(0, leftCount);
+  const rightTeams   = teams.slice(leftCount);
 
-  // Font settings
-  const FONT_BOLD   = 'bold 19px Sans';
-  const FONT_NAME   = '15px Sans';
-  const FONT_NORMAL = '16px Sans';
+  const FONT_RANK   = 'bold 18px Sans';
+  const FONT_NAME   = '14px Sans';
+  const FONT_NUM    = '16px Sans';
   const GOLD        = '#FFD700';
   const WHITE       = '#FFFFFF';
-  const SHADOW      = 'rgba(0,0,0,0.8)';
+  const SHADOW      = 'rgba(0,0,0,0.9)';
 
-  function drawText(text, x, y, font, color, align = 'left') {
-    ctx.font = font;
-    ctx.textAlign = align;
+  function drawText(text, x, y, font, color, align = 'center') {
+    ctx.font        = font;
+    ctx.textAlign   = align;
     ctx.shadowColor = SHADOW;
-    ctx.shadowBlur = 4;
-    ctx.fillStyle = color;
-    ctx.fillText(text, x, y + 6);
-    ctx.shadowBlur = 0;
+    ctx.shadowBlur  = 4;
+    ctx.fillStyle   = color;
+    ctx.fillText(String(text), x, y + 6);
+    ctx.shadowBlur  = 0;
   }
 
-  // Draw left teams
-  for (let i = 0; i < leftTeams.length; i++) {
-    const t   = leftTeams[i];
-    const mid = ROW_MIDS[i];
-    if (!mid) continue;
-
-    drawText(String(t.rank),          L.slot,      mid, FONT_BOLD,   GOLD,  'center');
-    drawText(t.team_name || '-',      L.name,      mid, FONT_NAME,   WHITE, 'left');
-    drawText(String(t.placement_pts || 0), L.placement, mid, FONT_NORMAL, WHITE, 'center');
-    drawText(String(t.kill_pts || 0), L.kills,     mid, FONT_NORMAL, WHITE, 'center');
-    drawText(String(t.total || 0),    L.total,     mid, FONT_BOLD,   GOLD,  'center');
+  // Scale row positions if fewer than 24 teams
+  // If < 24 teams, rows still map 1:1 — just leave empty rows blank
+  function drawTeam(t, side, rowIndex) {
+    const mid = ROW_MIDS[rowIndex];
+    if (!mid) return;
+    const s = side === 'L' ? L : R;
+    drawText(t.rank,                    s.slot,      mid, FONT_RANK, GOLD,  'center');
+    drawText(t.team_name || '-',        s.name,      mid, FONT_NAME, WHITE, 'left');
+    drawText(t.placement_pts ?? 0,      s.placement, mid, FONT_NUM,  WHITE, 'center');
+    drawText(t.kill_pts ?? 0,           s.kills,     mid, FONT_NUM,  WHITE, 'center');
+    drawText(t.total ?? 0,              s.total,     mid, FONT_RANK, GOLD,  'center');
   }
 
-  // Draw right teams
-  for (let i = 0; i < rightTeams.length; i++) {
-    const t   = rightTeams[i];
-    const mid = ROW_MIDS[i];
-    if (!mid) continue;
-
-    drawText(String(t.rank),          R.slot,      mid, FONT_BOLD,   GOLD,  'center');
-    drawText(t.team_name || '-',      R.name,      mid, FONT_NAME,   WHITE, 'left');
-    drawText(String(t.placement_pts || 0), R.placement, mid, FONT_NORMAL, WHITE, 'center');
-    drawText(String(t.kill_pts || 0), R.kills,     mid, FONT_NORMAL, WHITE, 'center');
-    drawText(String(t.total || 0),    R.total,     mid, FONT_BOLD,   GOLD,  'center');
-  }
+  for (let i = 0; i < leftTeams.length;  i++) drawTeam(leftTeams[i],  'L', i);
+  for (let i = 0; i < rightTeams.length; i++) drawTeam(rightTeams[i], 'R', i);
 
   return canvas.toBuffer('image/png');
 }
