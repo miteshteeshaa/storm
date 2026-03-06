@@ -4,7 +4,11 @@
 const { google } = require('googleapis');
 
 function getAuth() {
-  const scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'];
+  const scopes = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/drive.file',
+  ];
 
   // Support GOOGLE_CREDENTIALS_JSON (paste entire service account JSON as one env var)
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
@@ -392,11 +396,18 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
   const spreadsheetId = create.data.spreadsheetId;
   const sheetMeta     = create.data.sheets;
 
-  // 2. Anyone with link can EDIT (needed so other admins can enter placements/kills)
-  await drive.permissions.create({
-    fileId: spreadsheetId,
-    requestBody: { role:'writer', type:'anyone' },
-  });
+  // 2. Anyone with link can EDIT — wrapped in try/catch since Drive API permissions
+  //    can fail if the API is still propagating; sheet still works without this
+  try {
+    await drive.permissions.create({
+      fileId: spreadsheetId,
+      requestBody: { role:'writer', type:'anyone' },
+    });
+  } catch (permErr) {
+    console.warn('⚠️ Could not set public permissions (Drive API):', permErr.message);
+    console.warn('   Sheet created successfully — share it manually if needed.');
+    // Don't throw — sheet was created, just not publicly shared yet
+  }
 
   // 3. Per-lobby: write values → format → formulas
   for (let idx = 0; idx < lobbyLetters.length; idx++) {
