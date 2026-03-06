@@ -145,6 +145,10 @@ const clearCmd = {
           { name: '🏟️ Lobby D', value: 'D' },
           { name: '🏟️ Lobby E', value: 'E' },
           { name: '🏟️ Lobby F', value: 'F' },
+          { name: '🏟️ Lobby G', value: 'G' },
+          { name: '🏟️ Lobby H', value: 'H' },
+          { name: '🏟️ Lobby I', value: 'I' },
+          { name: '🏟️ Lobby J', value: 'J' },
         )
     ),
 
@@ -167,7 +171,7 @@ const clearCmd = {
       // Strip all roles from every player
       const roleIds = [config.slot_role, config.waitlist_role, config.registered_role, config.idpass_role].filter(Boolean);
       // Also strip all lobby roles
-      const lobbyLetters = ['A','B','C','D','E','F'].slice(0, settings.lobbies || 4);
+      const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, settings.lobbies || 4);
       for (const letter of lobbyLetters) {
         if (lobbyConf[letter]?.role_id) roleIds.push(lobbyConf[letter].role_id);
       }
