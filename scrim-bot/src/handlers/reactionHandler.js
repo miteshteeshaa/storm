@@ -1,4 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
+const { syncTeamsToSheet } = require('./sheets');
 const {
   getConfig, getRegistrations, setRegistrations,
   getScrimSettings, getLobbyConfig
@@ -208,6 +209,7 @@ async function handleReactionAdd(reaction, user) {
 
     await updateTeamCardEmbed(message, team);
     await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+    await syncSheet(guild, config, data);
 
     if (team.lobby && team.lobby_slot && lobbyConf[team.lobby]?.channel_id) {
       await postToLobbyChannel(guild, team, lobbyConf, settings, data);
@@ -238,6 +240,7 @@ async function handleReactionAdd(reaction, user) {
   setRegistrations(guild.id, data);
   await refreshConfirmList(guild, session, settings, data);
   await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+  await syncSheet(guild, config, data);
 }
 
 // ── Handle reaction remove ────────────────────────────────────────────────────
@@ -289,6 +292,7 @@ async function handleReactionRemove(reaction, user) {
     setRegistrations(guild.id, data);
     await updateTeamCardEmbed(message, team);
     await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+    await syncSheet(guild, config, data);
     return;
   }
 
@@ -309,6 +313,7 @@ async function handleReactionRemove(reaction, user) {
   setRegistrations(guild.id, data);
   await refreshConfirmList(guild, session, settings, data);
   await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+  await syncSheet(guild, config, data);
 }
 
 // ── Post/update lobby-specific slot list in lobby channel ─────────────────────
@@ -351,6 +356,16 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
 }
 
 // ── Refresh all slot lists ────────────────────────────────────────────────────
+async function syncSheet(guild, config, data) {
+  try {
+    if (config.spreadsheet_id) {
+      await syncTeamsToSheet(config.spreadsheet_id, data.slots || []);
+    }
+  } catch (err) {
+    console.error('Sheet sync error:', err.message);
+  }
+}
+
 async function refreshAllSlotLists(guild, config, settings, lobbyConf, data) {
   const ids = getPersistentSlotListId(guild.id);
 
