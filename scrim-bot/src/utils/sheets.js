@@ -289,6 +289,92 @@ async function writeLobbyFormulas(sheets, spreadsheetId, sheetTitle, slotsPerLob
   }
 }
 
+
+// ── Protect everything EXCEPT Place & Kills columns ──────────────────────────
+// Protected: A:F (scoring table, slot, team name, tag) + total columns
+// Editable by anyone: only the Place & Kills match columns (G onwards, pairs)
+async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches) {
+  const { totalPlaceCol } = totalCols(numMatches);
+
+  // The service account email is the only one that can bypass hard locks
+  const serviceEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL
+    || process.env.GOOGLE_SERVICE_EMAIL
+    || (process.env.GOOGLE_CREDENTIALS_JSON
+        ? (() => { try { return JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON).client_email; } catch { return ''; } })()
+        : '');
+
+  const botOnly = serviceEmail
+    ? { users: [serviceEmail], groups: [], domainUsersCanEdit: false }
+    : { users: [], groups: [], domainUsersCanEdit: false };
+
+  const requests = [];
+
+  // ── 1. HARD LOCK: Header rows 1-2 — nobody but bot can touch ─────────────
+  requests.push({
+    addProtectedRange: {
+      protectedRange: {
+        range: { sheetId, startRowIndex: 0, endRowIndex: 2 },
+        description: '🔒 Header rows — managed by bot only',
+        warningOnly: false,
+        editors: botOnly,
+      },
+    },
+  });
+
+  // ── 2. HARD LOCK: Cols A-C (scoring table + gap) data rows ───────────────
+  //    Admins CAN adjust scoring values (kills/placement points) in col A:B
+  //    so these get a WARNING only — they see a dialog but CAN proceed
+  requests.push({
+    addProtectedRange: {
+      protectedRange: {
+        range: { sheetId, startRowIndex: 2, endRowIndex: 2 + slotsPerLobby, startColumnIndex: 0, endColumnIndex: 3 },
+        description: '⚠️ Scoring table — edit here to adjust kill/placement points',
+        warningOnly: true,   // <-- admins CAN edit scoring table with a warning
+      },
+    },
+  });
+
+  // ── 3. HARD LOCK: Col D (slot numbers) — bot managed ─────────────────────
+  requests.push({
+    addProtectedRange: {
+      protectedRange: {
+        range: { sheetId, startRowIndex: 2, endRowIndex: 2 + slotsPerLobby, startColumnIndex: 3, endColumnIndex: 4 },
+        description: '🔒 Slot numbers — managed by bot only',
+        warningOnly: false,
+        editors: botOnly,
+      },
+    },
+  });
+
+  // ── 4. HARD LOCK: Cols E-F (Team Name + TAG) — bot managed ───────────────
+  requests.push({
+    addProtectedRange: {
+      protectedRange: {
+        range: { sheetId, startRowIndex: 2, endRowIndex: 2 + slotsPerLobby, startColumnIndex: 4, endColumnIndex: 6 },
+        description: '🔒 Team Name & Tag — managed by bot only, do not edit',
+        warningOnly: false,
+        editors: botOnly,
+      },
+    },
+  });
+
+  // ── 5. HARD LOCK: Total cols (auto-calculated formulas) ───────────────────
+  requests.push({
+    addProtectedRange: {
+      protectedRange: {
+        range: { sheetId, startRowIndex: 2, endRowIndex: 2 + slotsPerLobby, startColumnIndex: totalPlaceCol, endColumnIndex: totalPlaceCol + 3 },
+        description: '🔒 Auto-calculated totals — do not edit',
+        warningOnly: false,
+        editors: botOnly,
+      },
+    },
+  });
+
+  // Cols G onward (match Place + Kills columns) are left FULLY OPEN for admins to enter data
+
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+}
+
 // ── Create a new spreadsheet: one tab per lobby, numMatches match columns ─────
 async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = ['A','B','C','D'], numMatches = 150) {
   const auth   = getAuth();
@@ -306,10 +392,10 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
   const spreadsheetId = create.data.spreadsheetId;
   const sheetMeta     = create.data.sheets;
 
-  // 2. Public viewable
+  // 2. Anyone with link can EDIT (needed so other admins can enter placements/kills)
   await drive.permissions.create({
     fileId: spreadsheetId,
-    requestBody: { role:'reader', type:'anyone' },
+    requestBody: { role:'writer', type:'anyone' },
   });
 
   // 3. Per-lobby: write values → format → formulas
@@ -328,6 +414,7 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
 
     await formatLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
     await writeLobbyFormulas(sheets, spreadsheetId, sheetTitle, slotsPerLobby, numMatches);
+    await protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
   }
 
   return {
