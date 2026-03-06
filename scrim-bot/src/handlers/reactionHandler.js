@@ -1,5 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
-const { syncTeamsToSheet } = require('./sheets');
+const { syncTeamsToSheet } = require('../utils/sheets');
 const {
   getConfig, getRegistrations, setRegistrations,
   getScrimSettings, getLobbyConfig
