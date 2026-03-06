@@ -126,7 +126,7 @@ module.exports = {
 
             // Add lobby letter emojis based on configured lobby count
             const numLobbies  = settings.lobbies || 4;
-            const lobbyEmojis = ['🅰️','🅱️','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'].slice(0, numLobbies);
+            const lobbyEmojis = ['🇦','🇧','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'].slice(0, numLobbies);
             for (const e of lobbyEmojis) {
               try { await msg.react(e); } catch {}
               await new Promise(r => setTimeout(r, 300));
