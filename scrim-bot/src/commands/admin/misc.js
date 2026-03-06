@@ -47,14 +47,25 @@ async function postFreshLobbySlotList(guild, letter, lobbyConf, settings) {
   const lc = lobbyConf[letter];
   if (!lc?.channel_id) return;
   try {
-    const ch    = await guild.channels.fetch(lc.channel_id);
+    const ch     = await guild.channels.fetch(lc.channel_id);
+    const ids    = getPersistentSlotListId(guild.id);
+    const msgKey = `lobby_${letter}`;
+
+    // Delete old slot list message if it exists
+    if (ids[msgKey]) {
+      try {
+        const old = await ch.messages.fetch(ids[msgKey]);
+        await old.unpin().catch(() => {});
+        await old.delete().catch(() => {});
+      } catch {}
+    }
+
     const embed = buildPersistentSlotList([], settings, letter);
     const msg   = await ch.send({ embeds: [embed] });
     try { await msg.pin(); } catch {}
-    // Save the new message ID
-    setPersistentSlotListId(guild.id, { [`lobby_${letter}`]: msg.id });
+    setPersistentSlotListId(guild.id, { [msgKey]: msg.id });
   } catch (err) {
-    console.error(`⚠️ postFreshLobbySlotList error:`, err.message);
+    console.error(`postFreshLobbySlotList error:`, err.message);
   }
 }
 
@@ -204,11 +215,20 @@ const clearCmd = {
         await postFreshLobbySlotList(interaction.guild, letter, lobbyConf, settings);
       }
 
-      // Post fresh overall slot list in overall channel (if different from slot allocation)
+      // Post fresh overall slot list in overall channel only if explicitly configured
       const overallChannelId = config.idpass_channel;
       if (overallChannelId && overallChannelId !== config.slotlist_channel) {
         try {
-          const ch    = await interaction.guild.channels.fetch(overallChannelId);
+          const ch  = await interaction.guild.channels.fetch(overallChannelId);
+          const ids = getPersistentSlotListId(interaction.guildId);
+          // Delete old overall slot list
+          if (ids.overall) {
+            try {
+              const oldMsg = await ch.messages.fetch(ids.overall);
+              await oldMsg.unpin().catch(() => {});
+              await oldMsg.delete().catch(() => {});
+            } catch {}
+          }
           const embed = buildPersistentSlotList([], settings);
           const msg   = await ch.send({ embeds: [embed] });
           try { await msg.pin(); } catch {}
