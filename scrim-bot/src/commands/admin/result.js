@@ -1,9 +1,7 @@
-// ── /results command ──────────────────────────────────────────────────────────
-// Pulls final standings from Google Sheet and generates a results image
-
+// ── /results command ───────────────────────────────────────────────────────────
 const {
-  SlashCommandBuilder, AttachmentBuilder,
-  ActionRowBuilder, ChannelSelectMenuBuilder, ChannelType,
+  SlashCommandBuilder, AttachmentBuilder, EmbedBuilder,
+  ActionRowBuilder, StringSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType,
 } = require('discord.js');
 const { getConfig, getScrimSettings, getRegistrations } = require('../../utils/database');
 const { errorEmbed, infoEmbed } = require('../../utils/embeds');
@@ -11,71 +9,73 @@ const { isAdmin, isActivated } = require('../../utils/permissions');
 const { generateResultsImage } = require('../../utils/imageGenerator');
 const { getSheetStandings } = require('../../utils/sheets');
 const fs   = require('fs');
-const path = require('path');
 
-// Scoring table (placement → points) matching your sheet
-const PLACEMENT_PTS = {
-  1:10, 2:6, 3:5, 4:4, 5:3, 6:2, 7:1, 8:1,
-  9:0, 10:0, 11:0, 12:0, 13:0, 14:0, 15:0,
-  16:0, 17:0, 18:0, 19:0, 20:0, 21:0, 22:0, 23:0, 24:0,
-};
+const MEDALS = ['🥇', '🥈', '🥉'];
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('results')
-    .setDescription('Generate and post the final results image (Admin only)'),
+    .setDescription('Generate and post the final results image (Admin only)')
+    .addStringOption(opt =>
+      opt.setName('lobby')
+        .setDescription('Which lobby (A, B, C...)')
+        .setRequired(false)
+    ),
 
   async execute(interaction) {
-    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
-    if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+    if (!isActivated(interaction.guildId))
+      return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
+    if (!await isAdmin(interaction))
+      return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
     await interaction.deferReply({ ephemeral: true });
 
     try {
       const config   = getConfig(interaction.guildId);
       const settings = getScrimSettings(interaction.guildId);
-      const data     = getRegistrations(interaction.guildId);
 
-      // Check template exists
+      // Check template
       const templatePath = config.results_template_path;
       if (!templatePath || !fs.existsSync(templatePath)) {
         return interaction.editReply({
-          embeds: [errorEmbed('No Template', 'No results template uploaded. Use `/config` → "Results Template" to upload one.')],
+          embeds: [errorEmbed('No Template', 'Upload a results template via `/config` → "Results Template Image".')],
         });
       }
 
-      // Check sheet configured
-      if (!config.spreadsheet_id) {
+      // Check sheet
+      if (!config.spreadsheet_id && !config.sheet_url) {
         return interaction.editReply({
-          embeds: [errorEmbed('No Sheet', 'No Google Sheet linked. Run `/sheet` first.')],
+          embeds: [errorEmbed('No Sheet', 'No Google Sheet linked. Run `/config` and set the Sheet URL.')],
         });
       }
+
+      const spreadsheetId = config.spreadsheet_id || extractSheetId(config.sheet_url);
 
       await interaction.editReply({ embeds: [infoEmbed('⏳ Generating...', 'Fetching standings from Google Sheet...')] });
 
-      // Pull standings from sheet
-      const standings = await getSheetStandings(config.spreadsheet_id, settings.slots_per_lobby || 24);
+      // Pull standings
+      const lobbyFilter = interaction.options.getString('lobby')?.toUpperCase() || null;
+      const standings   = await getSheetStandings(spreadsheetId, settings.slots_per_lobby || 24);
 
       if (!standings || standings.length === 0) {
-        return interaction.editReply({ embeds: [errorEmbed('No Data', 'No match data found in the Google Sheet yet.')] });
+        return interaction.editReply({ embeds: [errorEmbed('No Data', 'No match data found in the Google Sheet.')] });
       }
 
-      // Sort by total descending
+      // Sort + rank
       standings.sort((a, b) => b.total - a.total);
       standings.forEach((t, i) => t.rank = i + 1);
 
       // Generate image
-      const imageBuffer = await generateResultsImage(templatePath, standings);
+      const imageBuffer       = await generateResultsImage(templatePath, standings);
+      const previewAttachment = new AttachmentBuilder(imageBuffer, { name: 'results_preview.png' });
 
-      // Ask admin which channel to post in
+      // Channel picker
       const channelRow = new ActionRowBuilder().addComponents(
         new ChannelSelectMenuBuilder()
           .setCustomId('results_channel_pick')
           .setPlaceholder('Select channel to post results in')
           .addChannelTypes(ChannelType.GuildText)
       );
-
-      const previewAttachment = new AttachmentBuilder(imageBuffer, { name: 'results_preview.png' });
 
       await interaction.editReply({
         content: '**Preview — select a channel to post:**',
@@ -84,7 +84,7 @@ module.exports = {
         embeds: [],
       });
 
-      // Wait for channel selection
+      // Wait for channel pick
       let pick;
       try {
         pick = await interaction.fetchReply().then(msg =>
@@ -98,25 +98,49 @@ module.exports = {
       const targetChannelId = pick.values[0];
       await pick.deferUpdate();
 
-      // Post to selected channel
-      const targetChannel = await interaction.guild.channels.fetch(targetChannelId);
+      // Build announcement embed
+      const scrimName = settings.scrim_name || 'SCRIM';
+      const lobbyLabel = lobbyFilter ? `Lobby ${lobbyFilter}` : 'Overall';
+      const dateStr   = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: undefined });
+
+      const top3Lines = standings.slice(0, 3).map((t, i) =>
+        `${MEDALS[i]} **${t.team_name}**`
+      ).join('\n');
+
+      const announcementEmbed = new EmbedBuilder()
+        .setColor(0xFFD700)
+        .setTitle(`Results of ${scrimName} Scrims, ${lobbyLabel} on ${dateStr}`)
+        .setDescription(
+          `Congratulation to **${standings[0]?.team_name}** for 1st place!\n\n` +
+          top3Lines
+        )
+        .setTimestamp();
+
+      // Post to target channel
+      const targetChannel  = await interaction.guild.channels.fetch(targetChannelId);
       const finalAttachment = new AttachmentBuilder(imageBuffer, { name: 'results.png' });
-      await targetChannel.send({ files: [finalAttachment] });
+
+      await targetChannel.send({
+        embeds: [announcementEmbed],
+        files:  [finalAttachment],
+      });
 
       await interaction.editReply({
         content: `✅ Results posted in <#${targetChannelId}>!`,
-        files: [],
-        components: [],
-        embeds: [],
+        files: [], components: [], embeds: [],
       });
 
     } catch (err) {
       console.error('Results error:', err);
       await interaction.editReply({
         embeds: [errorEmbed('Error', `Something went wrong: ${err.message}`)],
-        files: [],
-        components: [],
+        files: [], components: [],
       });
     }
   },
 };
+
+function extractSheetId(url) {
+  const m = (url || '').match(/\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : null;
+}
