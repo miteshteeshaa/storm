@@ -5,7 +5,7 @@ const {
 } = require('../../utils/database');
 const { successEmbed, errorEmbed, infoEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
-const { extractSheetId, writeRegistrationSheet } = require('../../utils/sheets');
+const { clearTeamsFromSheet } = require('../../utils/sheets');
 const {
   buildPersistentSlotList,
   getPersistentSlotListId,
@@ -184,6 +184,12 @@ const clearCmd = {
       // Clear all data
       clearRegistrations(interaction.guildId);
       clearMatches(interaction.guildId);
+      // Clear sheet teams
+      const cfg = getConfig(interaction.guildId);
+      const stg = getScrimSettings(interaction.guildId);
+      if (cfg.spreadsheet_id) {
+        try { await clearTeamsFromSheet(cfg.spreadsheet_id, stg.slots_per_lobby || 24); } catch {}
+      }
       setServer(interaction.guildId, { registration_open: false });
       // Clear all stored message IDs
       setPersistentSlotListId(interaction.guildId, {});
