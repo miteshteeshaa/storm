@@ -1,8 +1,27 @@
 // ── Google Sheets utility ─────────────────────────────────────────────────────
-// Service Account auth via GOOGLE_SERVICE_EMAIL + GOOGLE_PRIVATE_KEY
+// Supports two auth modes:
+//   1. OAuth2 refresh token (GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET + GOOGLE_OAUTH_REFRESH_TOKEN)
+//      → Used for Drive file CREATION — files owned by your personal Google account, no quota issues
+//   2. Service Account JWT (GOOGLE_CREDENTIALS_JSON)
+//      → Used as fallback for reading/writing sheet data
 
 const { google } = require('googleapis');
 
+// ── OAuth2 client for personal account Drive operations ───────────────────────
+function getOAuthClient() {
+  const clientId     = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
+
+  if (!clientId || !clientSecret || !refreshToken) return null;
+
+  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, 'urn:ietf:wg:oauth:2.0:oob');
+  oauth2.setCredentials({ refresh_token: refreshToken });
+  console.log('✅ Using OAuth2 — personal Google account for Drive creation');
+  return oauth2;
+}
+
+// ── Service account JWT for sheet read/write ──────────────────────────────────
 function getAuth() {
   const scopes = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -15,21 +34,18 @@ function getAuth() {
     try {
       let raw = process.env.GOOGLE_CREDENTIALS_JSON.trim();
 
-      // Railway sometimes wraps the value in quotes — strip them
       if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
         raw = raw.slice(1, -1);
       }
 
       const creds = JSON.parse(raw);
 
-      // Normalize private key newlines (Railway can mangle \n inside JSON values)
       if (creds.private_key) {
         creds.private_key = creds.private_key.replace(/\\n/g, '\n');
       }
 
       console.log('✅ Using GOOGLE_CREDENTIALS_JSON — email:', creds.client_email);
 
-      // Use JWT directly — more explicit and reliable than GoogleAuth for service accounts
       return new google.auth.JWT(
         creds.client_email,
         null,
@@ -41,7 +57,7 @@ function getAuth() {
     }
   }
 
-  // Fallback: support GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY
+  // Fallback: GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_EMAIL || '';
   let key     = process.env.GOOGLE_PRIVATE_KEY || '';
 
@@ -395,15 +411,20 @@ async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, 
   await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
 
-// ── Create a new spreadsheet via Drive API (works for service accounts) ───────
+// ── Create a new spreadsheet via Drive API ───────────────────────────────────
+// Uses OAuth2 (personal account) if configured — avoids service account quota issues
+// Falls back to service account auth if OAuth2 not set up
 async function driveCreateSpreadsheet(auth, title) {
-  const drive      = google.drive({ version: 'v3', auth });
-  const folderId   = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  const ownerEmail = process.env.DRIVE_OWNER_EMAIL; // your Gmail — transfers ownership so quota hits YOUR account
+  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
-  if (!folderId) throw new Error('GOOGLE_DRIVE_FOLDER_ID is not set.');
+  if (!folderId) throw new Error(
+    'GOOGLE_DRIVE_FOLDER_ID is not set. Create a Google Drive folder, share it with the service account, and add the folder ID to Railway variables.'
+  );
 
-  // Create the file
+  // Prefer OAuth2 so the file is owned by your personal account (no quota issues)
+  const driveAuth = getOAuthClient() || auth;
+  const drive     = google.drive({ version: 'v3', auth: driveAuth });
+
   const res = await drive.files.create({
     requestBody: {
       name:     title,
@@ -413,24 +434,27 @@ async function driveCreateSpreadsheet(auth, title) {
     fields:            'id',
     supportsAllDrives: true,
   });
+
   const fileId = res.data.id;
 
-  // Transfer ownership to your Gmail so quota counts against YOUR account, not the service account's
-  if (ownerEmail) {
+  // Share the new file with the service account so it can read/write sheet data
+  if (getOAuthClient()) {
     try {
-      await drive.permissions.create({
-        fileId,
-        transferOwnership: true,
-        requestBody: {
-          role:         'owner',
-          type:         'user',
-          emailAddress: ownerEmail,
-        },
-      });
-      console.log('✅ Ownership transferred to', ownerEmail);
+      let saEmail = '';
+      if (process.env.GOOGLE_CREDENTIALS_JSON) {
+        saEmail = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON).client_email;
+      } else {
+        saEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_EMAIL || '';
+      }
+      if (saEmail) {
+        await drive.permissions.create({
+          fileId,
+          requestBody: { role: 'writer', type: 'user', emailAddress: saEmail },
+        });
+        console.log(`✅ Shared new sheet with service account: ${saEmail}`);
+      }
     } catch (e) {
-      // Ownership transfer fails for non-Workspace accounts — file still works fine
-      console.warn('⚠️ Could not transfer ownership:', e.message);
+      console.warn('⚠️ Could not share with service account:', e.message);
     }
   }
 
