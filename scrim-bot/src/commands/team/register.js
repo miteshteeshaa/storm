@@ -4,7 +4,7 @@ const {
 } = require('../../utils/database');
 const { errorEmbed } = require('../../utils/embeds');
 const { isActivated, isRegistrationOpen } = require('../../utils/permissions');
-const { writeRegistrationSheet, extractSheetId } = require('../../utils/sheets');
+const { syncTeamsToSheet } = require('../../utils/sheets');
 const { registerTeamCard } = require('../../handlers/reactionHandler');
 
 module.exports = {
@@ -81,8 +81,9 @@ module.exports = {
       // ── Google Sheet ──────────────────────────────────────────────────────
       if (config.sheet_url) {
         try {
-          const sheetId = extractSheetId(config.sheet_url);
-          if (sheetId) await writeRegistrationSheet(sheetId, data.slots, interaction.client);
+          const m = (config.sheet_url || '').match(/\/d\/([a-zA-Z0-9-_]+)/);
+          const sheetId = m ? m[1] : null;
+          if (sheetId) await syncTeamsToSheet(sheetId, data.slots);
         } catch {}
       }
 
@@ -130,11 +131,11 @@ module.exports = {
 
             // Add configured lobby letter emojis only (based on lobby count)
             const numLobbies  = settings.lobbies || 4;
-            const lobbyEmojis = ['🅰️','🅱️','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'].slice(0, numLobbies);
+            const lobbyEmojis = ['🅐','🅑','🅒','🅓','🅔','🅕','🅖','🅗','🅘','🅙'].slice(0, numLobbies);
             for (const e of lobbyEmojis) {
               try { await msg.react(e); } catch {}
+            // ❌ added by reactionHandler after slot is assigned
             }
-            try { await msg.react('❌'); } catch {}
           }
         } catch (err) {
           console.error('⚠️ Could not post team card:', err.message);
