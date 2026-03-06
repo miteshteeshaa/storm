@@ -23,8 +23,10 @@ module.exports = {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      if (!isActivated(interaction.guildId))        return interaction.editReply({ embeds: [errorEmbed('Bot Not Active', 'The scrim bot is not active.')] });
-      if (!isRegistrationOpen(interaction.guildId)) return interaction.editReply({ embeds: [errorEmbed('Registration Closed', 'Wait for admin to open registration.')] });
+      if (!isActivated(interaction.guildId))
+        return interaction.editReply({ embeds: [errorEmbed('Bot Not Active', 'The scrim bot is not active.')] });
+      if (!isRegistrationOpen(interaction.guildId))
+        return interaction.editReply({ embeds: [errorEmbed('Registration Closed', 'Wait for admin to open registration.')] });
 
       const config   = getConfig(interaction.guildId);
       const settings = getScrimSettings(interaction.guildId);
@@ -41,7 +43,7 @@ module.exports = {
         if (p && !players.find(x => x.id === p.id)) players.push(p);
       }
 
-      // ── Duplicate checks ──────────────────────────────────────────────────
+      // ── Duplicate checks ────────────────────────────────────────────────────
       const allTeams = [...data.slots, ...data.waitlist];
       if (allTeams.find(t => t.team_tag.toLowerCase() === teamTag.toLowerCase()))
         return interaction.editReply({ embeds: [errorEmbed('Tag Taken', `**[${teamTag}]** is already registered.`)] });
@@ -66,7 +68,7 @@ module.exports = {
       else             data.waitlist.push(team);
       setRegistrations(interaction.guildId, data);
 
-      // ── Roles ─────────────────────────────────────────────────────────────
+      // ── Roles ───────────────────────────────────────────────────────────────
       try {
         const member = interaction.member;
         if (config.registered_role) await member.roles.add(config.registered_role).catch(() => {});
@@ -78,18 +80,12 @@ module.exports = {
         }
       } catch {}
 
-      // ── Google Sheet ──────────────────────────────────────────────────────
-      if (config.sheet_url) {
-        try {
-          const m = (config.sheet_url || '').match(/\/d\/([a-zA-Z0-9-_]+)/);
-          const sheetId = m ? m[1] : null;
-          if (sheetId) await syncTeamsToSheet(sheetId, data.slots);
-        } catch {}
+      // ── Sync to Google Sheet (silent — never block registration) ─────────
+      if (config.spreadsheet_id) {
+        syncTeamsToSheet(config.spreadsheet_id, data.slots).catch(() => {});
       }
 
-
-
-      // ── Public confirmation in registration channel ───────────────────────
+      // ── Public confirmation in registration channel ─────────────────────
       if (config.register_channel) {
         try {
           const regCh = await interaction.guild.channels.fetch(config.register_channel);
@@ -110,8 +106,7 @@ module.exports = {
         } catch {}
       }
 
-      // ── Post team card in slot-allocation channel ─────────────────────────
-      // Only lobby letter emojis — slot is auto-assigned when admin reacts
+      // ── Post team card in slot-allocation channel ───────────────────────
       if (config.slotlist_channel && !isWaitlist) {
         try {
           const ch = await interaction.guild.channels.fetch(config.slotlist_channel);
@@ -129,14 +124,12 @@ module.exports = {
             const msg = await ch.send({ embeds: [card] });
             registerTeamCard(msg.id, interaction.guildId, teamIndex);
 
-            // Add configured lobby letter emojis only (based on lobby count)
+            // Add lobby letter emojis based on configured lobby count
             const numLobbies  = settings.lobbies || 4;
-            const lobbyEmojis = ['🅐','🅑','🅒','🅓','🅔','🅕','🅖','🅗','🅘','🅙'].slice(0, numLobbies);
+            const lobbyEmojis = ['🅰️','🅱️','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'].slice(0, numLobbies);
             for (const e of lobbyEmojis) {
               try { await msg.react(e); } catch {}
-              await new Promise(r => setTimeout(r, 300)); // avoid rate limit
-            }
-            // ❌ added by reactionHandler after slot is assigned
+              await new Promise(r => setTimeout(r, 300));
             }
           }
         } catch (err) {
@@ -144,8 +137,7 @@ module.exports = {
         }
       }
 
-
-      // ── Private reply to registrant ───────────────────────────────────────
+      // ── Private reply to registrant ─────────────────────────────────────
       const playerMentions = players.map(p => `<@${p.id}>`).join(', ');
       return interaction.editReply({
         embeds: [
