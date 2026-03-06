@@ -20,7 +20,10 @@ function registerConfirmSession(guildId, confirmMessageId, channelId, slotListMe
 function getConfirmSession(guildId) { return confirmSessions.get(guildId) || null; }
 
 // ── Emoji maps ────────────────────────────────────────────────────────────────
-const LOBBY_EMOJIS = { '🅰️':'A', '🅱️':'B', '🇨':'C', '🇩':'D', '🇪':'E', '🇫':'F' };
+const LOBBY_EMOJIS = {
+  '🇦':'A', '🇧':'B', '🇨':'C', '🇩':'D', '🇪':'E',
+  '🇫':'F', '🇬':'G', '🇭':'H', '🇮':'I', '🇯':'J',
+};
 const NUMBER_EMOJIS = {
   '1️⃣':1,'2️⃣':2,'3️⃣':3,'4️⃣':4,'5️⃣':5,
   '6️⃣':6,'7️⃣':7,'8️⃣':8,'9️⃣':9,'🔟':10,
