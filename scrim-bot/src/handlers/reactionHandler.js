@@ -272,7 +272,7 @@ async function handleReactionAdd(reaction, user) {
       data.slots[cardInfo.teamIndex] = team;
       setRegistrations(guild.id, data);
       await updateTeamCardEmbed(message, team);
-      await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+      await refreshAllSlotLists(guild, config, settings, lobbyConf, data, team.lobby);
       if (team.lobby && team.lobby_slot && lobbyConf[team.lobby]?.channel_id) {
         await postToLobbyChannel(guild, team, lobbyConf, settings, data);
       }
@@ -330,7 +330,7 @@ async function handleReactionAdd(reaction, user) {
     setRegistrations(guild.id, data);
 
     await updateTeamCardEmbed(message, team);
-    await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+    await refreshAllSlotLists(guild, config, settings, lobbyConf, data, team.lobby);
     if (team.lobby && team.lobby_slot && lobbyConf[team.lobby]?.channel_id) {
       await postToLobbyChannel(guild, team, lobbyConf, settings, data);
     }
@@ -502,32 +502,33 @@ async function syncSheet(guild, config, data) {
 }
 
 // ── Refresh all slot lists ────────────────────────────────────────────────────
-async function refreshAllSlotLists(guild, config, settings, lobbyConf, data) {
+async function refreshAllSlotLists(guild, config, settings, lobbyConf, data, onlyLobby = null) {
   const ids = getPersistentSlotListId(guild.id);
   const botId = guild.client?.user?.id;
-  const LOBBY_LETTERS = ['A','B','C','D','E','F','G','H','I','J'].slice(0, settings.lobbies || 4);
+  const LOBBY_LETTERS = ['A','B','C','D','E','F','G','H','I','J']
+    .slice(0, settings.lobbies || 4)
+    .filter(l => !onlyLobby || l === onlyLobby);
 
-  for (const letter of LOBBY_LETTERS) {
+  // Run all lobby refreshes in parallel — much faster than sequential
+  await Promise.all(LOBBY_LETTERS.map(async letter => {
     const lc     = lobbyConf[letter];
     const msgKey = `lobby_${letter}`;
-    if (!lc?.channel_id) continue;
+    if (!lc?.channel_id) return;
 
     try {
       const ch    = await guild.channels.fetch(lc.channel_id);
       const embed = buildPersistentSlotList(data.slots, settings, letter);
 
-      // Try stored ID first
       if (ids[msgKey]) {
         try {
           const msg = await ch.messages.fetch(ids[msgKey]);
           await msg.edit({ embeds: [embed] });
-          continue;
+          return;
         } catch {
           setPersistentSlotListId(guild.id, { [msgKey]: null });
         }
       }
 
-      // Fall back: scan for existing bot slot list message
       const msgs = await ch.messages.fetch({ limit: 50 });
       const existing = msgs.find(m =>
         m.author.id === botId &&
@@ -537,9 +538,8 @@ async function refreshAllSlotLists(guild, config, settings, lobbyConf, data) {
         setPersistentSlotListId(guild.id, { [msgKey]: existing.id });
         await existing.edit({ embeds: [embed] });
       }
-      // If nothing found, don't post — postToLobbyChannel handles initial post
     } catch {}
-  }
+  }));
 }
 
 async function refreshConfirmList(guild, session, settings, data) {
