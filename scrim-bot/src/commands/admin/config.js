@@ -20,14 +20,16 @@ const CHANNEL_FIELDS = {
 };
 
 const ROLE_FIELDS = {
-  admin_role:      'Admin Role',
-  registered_role: 'Registered Role',
-  slot_role:       'Slot Holder Role',
-  waitlist_role:   'Waitlist Role',
+  admin_role:         'Admin Role',
+  registration_role:  'Registration Role',
+  registered_role:    'Registered Role',
+  slot_role:          'Slot Holder Role',
+  waitlist_role:      'Waitlist Role',
 };
 
 // ── Apply lobby channel permissions ───────────────────────────────────────────
-// Locks channel for @everyone, grants the lobby role: View, Read History, Add Reactions
+// Locks channel for @everyone, grants the lobby role: View + Read History only
+// (no sending, no reactions — channel is used to drop private lobby IDs)
 async function applyLobbyChannelPerms(guild, channelId, roleId) {
   if (!channelId || !roleId) return;
   try {
@@ -39,14 +41,37 @@ async function applyLobbyChannelPerms(guild, channelId, roleId) {
       ViewChannel: false,
     });
 
-    // Grant the lobby role the required permissions
+    // Lobby role: view + read only — no sending, no reacting
     await channel.permissionOverwrites.edit(roleId, {
       ViewChannel:        true,
       ReadMessageHistory: true,
-      AddReactions:       true,
+      SendMessages:       false,
+      AddReactions:       false,
     });
   } catch (err) {
     console.error(`⚠️ applyLobbyChannelPerms error (ch:${channelId} role:${roleId}):`, err.message);
+  }
+}
+
+// ── Apply registration channel permissions ────────────────────────────────────
+// open=true  → registration_role can Send, Read History, Use Commands, Add Reactions
+//              ViewChannel + ReadMessageHistory always stay on
+// open=false → revoke SendMessages only; everything else stays
+async function applyRegistrationChannelPerms(guild, channelId, roleId, open) {
+  if (!channelId || !roleId) return;
+  try {
+    const channel = await guild.channels.fetch(channelId);
+    if (!channel) return;
+
+    await channel.permissionOverwrites.edit(roleId, {
+      ViewChannel:            true,
+      ReadMessageHistory:     true,
+      SendMessages:           open ? true : false,
+      UseApplicationCommands: open ? true : null,  // null = inherit/reset when closed
+      AddReactions:           open ? true : null,
+    });
+  } catch (err) {
+    console.error(`⚠️ applyRegistrationChannelPerms error (ch:${channelId} role:${roleId}):`, err.message);
   }
 }
 
@@ -71,6 +96,7 @@ function buildStepMenu(settings) {
         { label: 'Leaderboard Channel',     value: 'leaderboard_channel', description: 'Leaderboard channel' },
         { label: 'Admin Channel',           value: 'admin_channel',       description: 'Admin channel' },
         { label: 'Admin Role',              value: 'admin_role',          description: 'Who can use admin commands' },
+        { label: 'Registration Role',       value: 'registration_role',   description: 'Role that can use the registration channel' },
         { label: 'Registered Role',         value: 'registered_role',     description: 'Auto-given on registration' },
         { label: 'Slot Holder Role',        value: 'slot_role',           description: 'Given when registered' },
         { label: 'Waitlist Role',           value: 'waitlist_role',       description: 'Given to waitlisted teams' },
@@ -161,6 +187,7 @@ function buildConfigEmbed(config, settings, lobbyConf) {
         name: '🎭 General Roles',
         value: [
           `👑 Admin: ${ro(config.admin_role)}`,
+          `📝 Registration: ${ro(config.registration_role)}`,
           `✅ Registered: ${ro(config.registered_role)}`,
           `🎯 Slot Holder: ${ro(config.slot_role)}`,
           `⏳ Waitlist: ${ro(config.waitlist_role)}`,
@@ -526,3 +553,5 @@ module.exports = {
     }
   },
 };
+
+module.exports.applyRegistrationChannelPerms = applyRegistrationChannelPerms;
