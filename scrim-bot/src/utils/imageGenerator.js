@@ -1,29 +1,30 @@
 // ── Results Image Generator ───────────────────────────────────────────────────
-// Supports two template layouts, auto-detected by aspect ratio:
-//   • DUAL_PANEL  — 851x621  (two columns of 12 rows each, 24 teams total)
-//   • SINGLE_PANEL — 1041x493 (one column of 4 rows, used for top-N summaries)
-// Scales to any resolution variant of each layout.
-// Supports chicken dinner logo overlay (1 or 2 logos per team win count).
+// Dual-panel layout: 857x625 base (12 rows × 2 columns = 24 teams)
+// Single-panel layout: 1041x493 base (4 rows × 1 column)
+// Pixel positions measured directly from the Asgardians Pro Scrim template.
 
 const { createCanvas, loadImage, registerFont } = require('canvas');
 const path = require('path');
 const fs   = require('fs');
 
-// Register a bundled font if the system has no fonts (e.g. Railway minimal image)
-// Drop a .ttf into src/assets/ to override — falls back gracefully if not present.
+// Register a bundled font if the system has no fonts (Railway minimal image).
+// Drop a .ttf into src/assets/font.ttf to use a custom font.
 const ASSET_FONT = path.join(__dirname, '../assets/font.ttf');
 if (fs.existsSync(ASSET_FONT)) {
   try { registerFont(ASSET_FONT, { family: 'BotFont' }); } catch {}
 }
 
-// ── DUAL PANEL template (851x621 base) ───────────────────────────────────────
+// ── DUAL PANEL template (857x625 base) ───────────────────────────────────────
+// Row midpoints measured from actual template pixels:
 const DUAL = {
-  BASE_W: 851, BASE_H: 621,
-  ROW_MIDS: [138, 174, 210, 246, 281, 317, 352, 388, 424, 460, 495, 530],
-  // left-align: rank, name  |  right-align: place, kills, total
-  L: { rank: 28,  name: 68,  place: 338, kills: 386, total: 422 },
-  R: { rank: 427, name: 463, place: 754, kills: 800, total: 840 },
-  FONT_SIZE_BOLD:   15,
+  BASE_W: 857, BASE_H: 625,
+  // Vertical midpoint of each of the 12 data rows
+  ROW_MIDS: [125, 174, 210, 247, 282, 318, 354, 390, 426, 461, 496, 532],
+  // Left panel (x: 0-412): left-align rank & name, right-align stats
+  L: { rank: 28,  name: 68,  place: 320, kills: 390, total: 415 },
+  // Right panel (x: 412-857): mirrors left
+  R: { rank: 440, name: 480, place: 735, kills: 800, total: 830 },
+  FONT_SIZE_BOLD:   14,
   FONT_SIZE_NORMAL: 13,
 };
 
@@ -31,10 +32,9 @@ const DUAL = {
 const SINGLE = {
   BASE_W: 1041, BASE_H: 493,
   ROW_MIDS: [150, 238, 327, 417],
-  // logo zone: between name end (~480) and placement col
-  LOGO_START_X: 490,  // x position for first logo
-  LOGO_GAP: 4,        // gap between logos
-  LOGO_H: 50,         // logo height in pixels (width auto-scaled)
+  LOGO_START_X: 490,
+  LOGO_GAP: 4,
+  LOGO_H: 50,
   C: { rank: 60, name: 130, place: 615, kills: 725, total: 1005 },
   FONT_SIZE_BOLD:   22,
   FONT_SIZE_NORMAL: 20,
@@ -42,44 +42,39 @@ const SINGLE = {
 
 /**
  * Detect layout from image dimensions.
- * dual  ~1.37 (851x621)  — two columns of 12 rows
+ * dual  ~1.37 (857x625) — two columns of 12 rows
  * single ~2.11 (1041x493) — one column of 4 rows
- *
- * We use a conservative threshold of 1.7 so dual templates don't get
- * misclassified when uploaded at unusual crop sizes.
- * @param {number} w
- * @param {number} h
- * @returns {'dual'|'single'}
  */
 function detectLayout(w, h) {
-  const ratio = w / h;
-  return ratio > 1.7 ? 'single' : 'dual';
+  return (w / h) > 1.7 ? 'single' : 'dual';
 }
 
 /**
  * Draw text with drop shadow. Uses canvas textBaseline='middle'.
  */
 function drawText(ctx, text, x, y, font, color, align = 'left') {
+  ctx.save();
   ctx.font         = font;
   ctx.textAlign    = align;
   ctx.textBaseline = 'middle';
-  ctx.fillStyle    = 'rgba(0,0,0,0.75)';
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
   ctx.fillText(String(text), x + 1, y + 1);
-  ctx.fillStyle    = color;
+  // Main text
+  ctx.fillStyle = color;
   ctx.fillText(String(text), x, y);
+  ctx.restore();
 }
 
 /**
  * Generate a results image.
- *
- * @param {string}  templatePath   Path to the PNG template
- * @param {Array}   teams          Sorted team objects:
+ * @param {string}      templatePath
+ * @param {Array}       teams  — sorted array of
  *   { rank, team_name, placement_pts, kill_pts, total, wins }
- *   `wins` = number of #1 finishes this team achieved (for chicken dinner logos)
- * @param {string}  fontColor      CSS hex for normal text  (default '#FFFFFF')
- * @param {string}  accentColor    CSS hex for rank & total (default '#FFD700')
- * @param {string|null} logoPath   Path to chicken dinner logo PNG (optional)
- * @returns {Promise<Buffer>}      PNG image buffer
+ * @param {string}      fontColor    — CSS hex, default '#FFFFFF'
+ * @param {string}      accentColor  — CSS hex for rank & total, default '#FFD700'
+ * @param {string|null} logoPath     — optional chicken dinner logo PNG path
+ * @returns {Promise<Buffer>}
  */
 async function generateResultsImage(
   templatePath,
@@ -116,27 +111,28 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath) 
   const L = scaleObj(DUAL.L, sx);
   const R = scaleObj(DUAL.R, sx);
 
-  const BOLD   = `bold ${Math.round(DUAL.FONT_SIZE_BOLD   * sx)}px Arial, sans-serif`;
-  const NORMAL = `${Math.round(DUAL.FONT_SIZE_NORMAL * sx)}px Arial, sans-serif`;
+  const fontSize      = Math.round(DUAL.FONT_SIZE_BOLD   * Math.min(sx, sy));
+  const fontSizeSmall = Math.round(DUAL.FONT_SIZE_NORMAL * Math.min(sx, sy));
+  const BOLD   = `bold ${fontSize}px Arial`;
+  const NORMAL = `${fontSizeSmall}px Arial`;
 
-  const slotsPerSide = Math.ceil(teams.length / 2);
-  const leftTeams    = teams.slice(0, slotsPerSide);
-  const rightTeams   = teams.slice(slotsPerSide);
+  // ── FILL COLUMN 1 FIRST, then column 2 ──────────────────────────────────
+  // Teams are already sorted by rank. Left column = rows 1-12, right = rows 13-24.
+  const numRows  = rowMids.length; // 12
+  const leftTeams  = teams.slice(0, numRows);
+  const rightTeams = teams.slice(numRows);
 
   // Load logo if provided
   let logo = null;
   if (logoPath && fs.existsSync(logoPath)) {
-    logo = await loadImage(logoPath);
+    try { logo = await loadImage(logoPath); } catch {}
   }
-
-  const LOGO_H = Math.round(28 * sy);
+  const LOGO_H = Math.round(24 * sy);
   const LOGO_W = logo ? Math.round(logo.width * LOGO_H / logo.height) : 0;
-  // Logo zone in dual panel: between name end and placement col
-  // name ends roughly at L.name + 160*sx, place starts at L.place - 50*sx
-  const LOGO_ZONE_X = Math.round(270 * sx); // start of logo zone (left panel)
-  const LOGO_ZONE_XR = Math.round(688 * sx); // start of logo zone (right panel)
+  const LOGO_ZONE_L = Math.round(270 * sx);
+  const LOGO_ZONE_R = Math.round(688 * sx);
 
-  for (let i = 0; i < rowMids.length; i++) {
+  for (let i = 0; i < numRows; i++) {
     const y = rowMids[i];
 
     if (i < leftTeams.length) {
@@ -146,9 +142,7 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath) 
       drawText(ctx, t.placement_pts, L.place, y, NORMAL, fontColor,   'right');
       drawText(ctx, t.kill_pts,      L.kills, y, NORMAL, fontColor,   'right');
       drawText(ctx, t.total,         L.total, y, BOLD,   accentColor, 'right');
-      if (logo && t.wins > 0) {
-        drawLogos(ctx, logo, LOGO_W, LOGO_H, LOGO_ZONE_X, y, t.wins, 3);
-      }
+      if (logo && t.wins > 0) drawLogos(ctx, logo, LOGO_W, LOGO_H, LOGO_ZONE_L, y, t.wins, 3);
     }
 
     if (i < rightTeams.length) {
@@ -158,9 +152,7 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath) 
       drawText(ctx, t.placement_pts, R.place, y, NORMAL, fontColor,   'right');
       drawText(ctx, t.kill_pts,      R.kills, y, NORMAL, fontColor,   'right');
       drawText(ctx, t.total,         R.total, y, BOLD,   accentColor, 'right');
-      if (logo && t.wins > 0) {
-        drawLogos(ctx, logo, LOGO_W, LOGO_H, LOGO_ZONE_XR, y, t.wins, 3);
-      }
+      if (logo && t.wins > 0) drawLogos(ctx, logo, LOGO_W, LOGO_H, LOGO_ZONE_R, y, t.wins, 3);
     }
   }
 }
@@ -173,48 +165,38 @@ async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath
   const rowMids = SINGLE.ROW_MIDS.map(y => Math.round(y * sy));
   const C = scaleObj(SINGLE.C, sx);
 
-  const BOLD   = `bold ${Math.round(SINGLE.FONT_SIZE_BOLD   * sx)}px Arial, sans-serif`;
-  const NORMAL = `${Math.round(SINGLE.FONT_SIZE_NORMAL * sx)}px Arial, sans-serif`;
+  const BOLD   = `bold ${Math.round(SINGLE.FONT_SIZE_BOLD   * Math.min(sx,sy))}px Arial`;
+  const NORMAL = `${Math.round(SINGLE.FONT_SIZE_NORMAL * Math.min(sx,sy))}px Arial`;
 
   let logo = null;
   if (logoPath && fs.existsSync(logoPath)) {
-    logo = await loadImage(logoPath);
+    try { logo = await loadImage(logoPath); } catch {}
   }
-
-  const LOGO_H = Math.round(SINGLE.LOGO_H * sy);
-  const LOGO_W = logo ? Math.round(logo.width * LOGO_H / logo.height) : 0;
+  const LOGO_H       = Math.round(SINGLE.LOGO_H * sy);
+  const LOGO_W       = logo ? Math.round(logo.width * LOGO_H / logo.height) : 0;
   const LOGO_START_X = Math.round(SINGLE.LOGO_START_X * sx);
   const LOGO_GAP     = Math.round(SINGLE.LOGO_GAP * sx);
 
-  for (let i = 0; i < rowMids.length; i++) {
-    if (i >= teams.length) break;
+  for (let i = 0; i < rowMids.length && i < teams.length; i++) {
     const t = teams[i];
     const y = rowMids[i];
-
     drawText(ctx, t.rank,          C.rank,  y, BOLD,   accentColor, 'left');
     drawText(ctx, t.team_name,     C.name,  y, NORMAL, fontColor,   'left');
     drawText(ctx, t.placement_pts, C.place, y, NORMAL, fontColor,   'right');
     drawText(ctx, t.kill_pts,      C.kills, y, NORMAL, fontColor,   'right');
     drawText(ctx, t.total,         C.total, y, BOLD,   accentColor, 'right');
-
-    if (logo && t.wins > 0) {
-      drawLogos(ctx, logo, LOGO_W, LOGO_H, LOGO_START_X, y, t.wins, LOGO_GAP);
-    }
+    if (logo && t.wins > 0) drawLogos(ctx, logo, LOGO_W, LOGO_H, LOGO_START_X, y, t.wins, LOGO_GAP);
   }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Draw N logo icons horizontally starting at (startX, midY) */
 function drawLogos(ctx, logo, lw, lh, startX, midY, count, gap) {
   const topY = midY - Math.floor(lh / 2);
   for (let n = 0; n < count; n++) {
-    const x = startX + n * (lw + gap);
-    ctx.drawImage(logo, x, topY, lw, lh);
+    ctx.drawImage(logo, startX + n * (lw + gap), topY, lw, lh);
   }
 }
 
-/** Scale an object's values by sx */
 function scaleObj(obj, sx) {
   return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, Math.round(v * sx)]));
 }
