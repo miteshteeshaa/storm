@@ -314,9 +314,19 @@ async function handleReactionAdd(reaction, user) {
       // Background: clean up reactions, roles, sheet
       (async () => {
         try {
-          // ── If slot was successfully assigned: remove ALL reactions then add ❌ only
+          // ── If slot assigned: show lobby emoji + slot emoji + ❌ ──────────────
           if (team.lobby_slot) {
             await message.reactions.removeAll().catch(() => {});
+            // Add assigned lobby letter emoji
+            const lobbyEmojiName = `ALPHABET_${team.lobby}`;
+            const lobbyEmojiId   = LOBBY_EMOJI_IDS[lobbyEmojiName];
+            if (lobbyEmojiId) await message.react(`${lobbyEmojiName}:${lobbyEmojiId}`).catch(() => {});
+            await new Promise(r => setTimeout(r, 200));
+            // Add slot number emoji
+            const slotEmoji = SLOT_EMOJI_LIST[team.lobby_slot - 1];
+            if (slotEmoji) await message.react(`${slotEmoji.name}:${slotEmoji.id}`).catch(() => {});
+            await new Promise(r => setTimeout(r, 200));
+            // Add ❌ to allow unassign
             await message.react('❌').catch(() => {});
           } else {
             // Lobby full — just remove the other lobby letter reactions, keep this one
@@ -611,19 +621,11 @@ async function refreshConfirmList(guild, session, settings, data) {
 
 async function updateTeamCardEmbed(message, team) {
   try {
-    // Cards are plain text — extract base line (first line before any status suffix)
+    // Cards are plain text — strip any previously appended status suffix, keep base line
     const baseContent = message.content?.split('\n')[0] || message.content || '';
-    // Strip any previously appended status
     const baseLine = baseContent.replace(/\s*[\|—].*$/, '').trimEnd();
-
-    let suffix = '';
-    if (team.lobby && team.lobby_slot) {
-      suffix = ` | ✅ Lobby ${team.lobby} · Slot ${team.lobby_slot}`;
-    } else if (team.lobby) {
-      suffix = ` | ⏳ Lobby ${team.lobby} · Full`;
-    }
-
-    await message.edit({ content: baseLine + suffix });
+    // No text suffix — lobby/slot info shown via reactions only
+    await message.edit({ content: baseLine });
   } catch {}
 }
 
