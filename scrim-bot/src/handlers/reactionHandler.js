@@ -288,12 +288,15 @@ async function handleReactionAdd(reaction, user) {
       const prevLobby = team.lobby;
 
       team.lobby = newLobby;
-      // Auto-assign next available slot when lobby is first set or switched
-      if (!team.lobby_slot || prevLobby !== newLobby) {
-        const autoSlot = nextAvailableSlot(data.slots, newLobby, settings);
-        if (autoSlot) team.lobby_slot = autoSlot;
-        else delete team.lobby_slot;
-      }
+      // Clear old slot BEFORE calling nextAvailableSlot so this team's own
+      // previous slot isn't counted as taken, allowing correct gap-filling
+      delete team.lobby_slot;
+      data.slots[cardInfo.teamIndex] = team;
+      // Auto-assign lowest free slot in the chosen lobby
+      const autoSlot = nextAvailableSlot(data.slots, newLobby, settings);
+      console.log(`[SLOT] lobby=${newLobby} autoSlot=${autoSlot} team=${team.team_name}`);
+      if (autoSlot) team.lobby_slot = autoSlot;
+      else console.warn(`[SLOT] Lobby ${newLobby} is full — no slot assigned`);
 
       // Save immediately
       data.slots[cardInfo.teamIndex] = team;
