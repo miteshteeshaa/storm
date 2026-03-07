@@ -48,8 +48,8 @@ function makeFont(size, bold) {
 //
 // LAYOUT A — "Pro Scrim" (gold rows, header # at x≈40)
 const LAYOUT_A = {
-  L: { rank:22/857, name:84/857, place:328/857, kills:369/857, total:411/857 },
-  R: { rank:460/857, name:504/857, place:748/857, kills:789/857, total:830/857 },
+  L: { rank:14/857, name:55/857, place:340/857, kills:378/857, total:420/857 },
+  R: { rank:447/857, name:488/857, place:755/857, kills:793/857, total:835/857 },
   ROW_MIDS_FY: [141,176,209,248,285,321,356,392,430,464,499,534].map(y => y/625),
   ROW_H_FY: 35/625,
   // Logo sits between team name and placement column
@@ -58,8 +58,8 @@ const LAYOUT_A = {
 
 // LAYOUT B — "Mauritius Scrim" (dark rows, header # at x≈63)
 const LAYOUT_B = {
-  L: { rank:22/857, name:71/857, place:318/857, kills:367/857, total:417/857 },
-  R: { rank:470/857, name:491/857, place:733/857, kills:782/857, total:831/857 },
+  L: { rank:14/857, name:55/857, place:328/857, kills:368/857, total:412/857 },
+  R: { rank:447/857, name:488/857, place:745/857, kills:785/857, total:829/857 },
   ROW_MIDS_FY: [139,175,211,246,282,318,353,389,425,460,496,532].map(y => y/625),
   ROW_H_FY: 35/625,
   LOGO_ZL_FX: 196/857, LOGO_ZR_FX: 616/857, LOGO_H_FY: 24/625,
@@ -168,20 +168,20 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath, 
     const y = rowMids[i];
     if (i < leftTeams.length) {
       const t = leftTeams[i];
-      drawText(ctx, t.rank,          L.rank,  y, NORMAL, accentColor, 'center');
+      drawText(ctx, t.rank,          L.rank,  y, NORMAL, accentColor, 'left');
       drawText(ctx, t.team_name,     L.name,  y, NORMAL, fontColor,   'left');
-      drawText(ctx, t.placement_pts, L.place, y, NORMAL, fontColor,   'center');
-      drawText(ctx, t.kill_pts,      L.kills, y, NORMAL, fontColor,   'center');
-      drawText(ctx, t.total,         L.total, y, NORMAL, accentColor, 'center');
+      drawText(ctx, t.placement_pts, L.place, y, NORMAL, fontColor,   'right');
+      drawText(ctx, t.kill_pts,      L.kills, y, NORMAL, fontColor,   'right');
+      drawText(ctx, t.total,         L.total, y, NORMAL, accentColor, 'right');
       if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZL, y, t.wins, 3);
     }
     if (i < rightTeams.length) {
       const t = rightTeams[i];
-      drawText(ctx, t.rank,          R.rank,  y, NORMAL, accentColor, 'center');
+      drawText(ctx, t.rank,          R.rank,  y, NORMAL, accentColor, 'left');
       drawText(ctx, t.team_name,     R.name,  y, NORMAL, fontColor,   'left');
-      drawText(ctx, t.placement_pts, R.place, y, NORMAL, fontColor,   'center');
-      drawText(ctx, t.kill_pts,      R.kills, y, NORMAL, fontColor,   'center');
-      drawText(ctx, t.total,         R.total, y, NORMAL, accentColor, 'center');
+      drawText(ctx, t.placement_pts, R.place, y, NORMAL, fontColor,   'right');
+      drawText(ctx, t.kill_pts,      R.kills, y, NORMAL, fontColor,   'right');
+      drawText(ctx, t.total,         R.total, y, NORMAL, accentColor, 'right');
       if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZR, y, t.wins, 3);
     }
   }
@@ -206,11 +206,11 @@ async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath
   for (let i = 0; i < rowMids.length && i < teams.length; i++) {
     const t = teams[i];
     const y = rowMids[i];
-    drawText(ctx, t.rank,          C.rank,  y, NORMAL, accentColor, 'center');
+    drawText(ctx, t.rank,          C.rank,  y, NORMAL, accentColor, 'left');
     drawText(ctx, t.team_name,     C.name,  y, NORMAL, fontColor,   'left');
-    drawText(ctx, t.placement_pts, C.place, y, NORMAL, fontColor,   'center');
-    drawText(ctx, t.kill_pts,      C.kills, y, NORMAL, fontColor,   'center');
-    drawText(ctx, t.total,         C.total, y, NORMAL, accentColor, 'center');
+    drawText(ctx, t.placement_pts, C.place, y, NORMAL, fontColor,   'right');
+    drawText(ctx, t.kill_pts,      C.kills, y, NORMAL, fontColor,   'right');
+    drawText(ctx, t.total,         C.total, y, NORMAL, accentColor, 'right');
     if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoStartX, y, t.wins, logoGap);
   }
 }
