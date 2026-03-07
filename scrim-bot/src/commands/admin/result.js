@@ -24,7 +24,12 @@ const PLACEMENT_PTS = {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('results')
-    .setDescription('Generate and post the final results image (Admin only)'),
+    .setDescription('Generate and post the final results image (Admin only)')
+    .addStringOption(opt =>
+      opt.setName('message')
+        .setDescription('Optional message to post above the results image (plain text)')
+        .setRequired(false)
+    ),
 
   async execute(interaction) {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
@@ -35,6 +40,7 @@ module.exports = {
     try {
       const config   = getConfig(interaction.guildId);
       const settings = getScrimSettings(interaction.guildId);
+      const customMessage = interaction.options.getString('message') || null;
 
       // Check template exists
       const templatePath = config.results_template_path;
@@ -151,10 +157,27 @@ module.exports = {
       const targetChannelId = pick.values[0];
       await pick.deferUpdate();
 
-      // Post to selected channel
+      // Post to selected channel — plain text + image, no embed
       const targetChannel = await interaction.guild.channels.fetch(targetChannelId);
       const finalAttachment = new AttachmentBuilder(imageBuffer, { name: 'results.png' });
-      await targetChannel.send({ files: [finalAttachment] });
+
+      // Build plain text announcement
+      const top3 = standings.slice(0, 3);
+      const medals = ['🥇', '🥈', '🥉'];
+      const top3Lines = top3.map((t, i) => `${medals[i]} ${t.team_name}`).join('\n');
+
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      const lobbyLabel = lobbyValue === 'ALL' ? 'All Lobbies' : `Lobby ${lobbyValue}`;
+
+      const header = customMessage
+        ? customMessage
+        : `**Results of ${settings.scrim_name}, ${lobbyLabel} on ${dateStr}**\nCongratulation to **${top3[0]?.team_name}** for 1st place!`;
+
+      await targetChannel.send({
+        content: `${header}\n\n${top3Lines}`,
+        files: [finalAttachment],
+      });
 
       await interaction.editReply({
         content: `✅ Results posted in <#${targetChannelId}>!`,
