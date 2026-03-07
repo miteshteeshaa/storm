@@ -439,12 +439,15 @@ async function handleReactionAdd(reaction, user) {
   const lobbyConf = getLobbyConfig(guild.id);
   const data      = getRegistrations(guild.id);
 
-  // Only the registered captain or manager of a team in THIS lobby can react
-  const teamIndex = data.slots.findIndex(t =>
-    (t.captain_id === user.id || t.manager_id === user.id) &&
-    t.lobby === session.lobbyLetter
-  );
-  if (teamIndex === -1) {
+  // Find ALL slots where this user is captain or manager in THIS lobby
+  const teamIndices = data.slots.reduce((acc, t, idx) => {
+    if ((t.captain_id === user.id || t.manager_id === user.id) && t.lobby === session.lobbyLetter) {
+      acc.push(idx);
+    }
+    return acc;
+  }, []);
+
+  if (teamIndices.length === 0) {
     // Not a registered captain/manager for this lobby — remove their reaction
     try { await reaction.users.remove(user.id); } catch {}
     return;
@@ -453,15 +456,22 @@ async function handleReactionAdd(reaction, user) {
   // Always remove the user's reaction immediately — keeps count at 1 (bot only)
   try { await reaction.users.remove(user.id); } catch {}
 
-  const team = data.slots[teamIndex];
-  const prevConfirmed = team.confirmed;
+  // Determine new confirmed state based on the first slot (toggle logic)
+  const firstTeam = data.slots[teamIndices[0]];
+  const prevConfirmed = firstTeam.confirmed;
 
+  let newConfirmed;
   if (emoji === '✅') {
-    // If already confirmed, toggle off (undo)
-    data.slots[teamIndex].confirmed = prevConfirmed === true ? null : true;
+    // If already confirmed, toggle off (undo); otherwise confirm
+    newConfirmed = prevConfirmed === true ? null : true;
   } else {
-    // If already cancelled, toggle off (undo)
-    data.slots[teamIndex].confirmed = prevConfirmed === false ? null : false;
+    // If already cancelled, toggle off (undo); otherwise cancel
+    newConfirmed = prevConfirmed === false ? null : false;
+  }
+
+  // Apply the same confirmed state to ALL of this player's slots in this lobby
+  for (const idx of teamIndices) {
+    data.slots[idx].confirmed = newConfirmed;
   }
 
   setRegistrations(guild.id, data);
