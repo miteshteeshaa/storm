@@ -86,14 +86,12 @@ const SLOT_EMOJI_LIST = [
   { name: '65811430',  id: '1479862456950980670' },  // 30
 ];
 
-// Unicode circled numbers for slot display (works in every server, no custom emojis needed)
-const SLOT_DISPLAY = {
-   1: '①',  2: '②',  3: '③',  4: '④',  5: '⑤',
-   6: '⑥',  7: '⑦',  8: '⑧',  9: '⑨', 10: '⑩',
-  11: '⑪', 12: '⑫', 13: '⑬', 14: '⑭', 15: '⑮',
-  16: '⑯', 17: '⑰', 18: '⑱', 19: '⑲', 20: '⑳',
-  21: '㉑', 22: '㉒', 23: '㉓', 24: '㉔', 25: '㉕',
-};
+// Build a lookup: slot number → Discord emoji string <:name:id>
+const SLOT_DISPLAY = {};
+for (const e of SLOT_EMOJI_LIST) {
+  const slotNum = SLOT_EMOJIS[e.name];
+  if (slotNum) SLOT_DISPLAY[slotNum] = `<:${e.name}:${e.id}>`;
+}
 
 function numEmoji(n) {
   return SLOT_DISPLAY[n] || `**${n}**`;
