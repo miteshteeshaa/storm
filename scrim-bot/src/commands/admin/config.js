@@ -260,10 +260,10 @@ module.exports = {
       // ── Scrim settings modals ────────────────────────────────────────────
       } else if (['scrim_name','lobbies','slots_per_lobby','first_slot'].includes(value)) {
         const labels = {
-          scrim_name:     ['Scrim Name',        'e.g. SUNGOLD LEAGUE', String(stg.scrim_name || 'SCRIM')],
-          lobbies:        ['Number of Lobbies', 'e.g. 2',              String(stg.lobbies || 4)],
-          slots_per_lobby:['Slots Per Lobby',   'e.g. 24',             String(stg.slots_per_lobby || 24)],
-          first_slot:     ['First Slot Number', 'e.g. 1',              String(stg.first_slot || 1)],
+          scrim_name:     ['Scrim Name',        'e.g. SUNGOLD LEAGUE', stg.scrim_name != null ? String(stg.scrim_name) : 'SCRIM'],
+          lobbies:        ['Number of Lobbies', 'e.g. 2',              stg.lobbies != null ? String(stg.lobbies) : '4'],
+          slots_per_lobby:['Slots Per Lobby',   'e.g. 24',             stg.slots_per_lobby != null ? String(stg.slots_per_lobby) : '24'],
+          first_slot:     ['First Slot Number', 'e.g. 1',              stg.first_slot != null ? String(stg.first_slot) : '1'],
         };
         const [label, placeholder, currentVal] = labels[value];
         await i.showModal(
@@ -281,11 +281,13 @@ module.exports = {
         if (['lobbies','slots_per_lobby','first_slot'].includes(value)) {
           const num = parseInt(raw);
           if (isNaN(num) || num < 1) {
-            await m.update({ content: '❌ Please enter a valid number (1 or higher).', embeds: [], components: [] });
+            await m.deferUpdate();
+            await interaction.editReply({ content: '❌ Please enter a valid number (1 or higher).', embeds: [], components: [] });
             continue;
           }
           if (value === 'lobbies' && num > 10) {
-            await m.update({ content: '❌ Maximum number of lobbies is **10** (A–J).', embeds: [], components: [] });
+            await m.deferUpdate();
+            await interaction.editReply({ content: '❌ Maximum number of lobbies is **10** (A–J).', embeds: [], components: [] });
             continue;
           }
           setScrimSettings(interaction.guildId, { [value]: num });
@@ -293,7 +295,8 @@ module.exports = {
           setScrimSettings(interaction.guildId, { [value]: raw });
         }
         const r = fresh();
-        await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+        await m.deferUpdate();
+        await interaction.editReply({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
       // ── Channel picker ───────────────────────────────────────────────────
       } else if (CHANNEL_FIELDS[value]) {
@@ -471,7 +474,8 @@ module.exports = {
         catch { continue; }
         setConfig(interaction.guildId, { sheet_url: m.fields.getTextInputValue('sheet_url_input') });
         const r = fresh();
-        await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+        await m.deferUpdate();
+        await interaction.editReply({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
       // ── View / Back ──────────────────────────────────────────────────────
       } else {
