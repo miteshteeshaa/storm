@@ -8,6 +8,8 @@ const { getConfig, setConfig, getScrimSettings, setScrimSettings, getLobbyConfig
 const { errorEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 
+const { PermissionsBitField } = require('discord.js');
+
 const CHANNEL_FIELDS = {
   register_channel:    'Registration Channel',
   slotlist_channel:    'Slot Allocation Channel',
@@ -23,6 +25,30 @@ const ROLE_FIELDS = {
   slot_role:       'Slot Holder Role',
   waitlist_role:   'Waitlist Role',
 };
+
+// ── Apply lobby channel permissions ───────────────────────────────────────────
+// Locks channel for @everyone, grants the lobby role: View, Read History, Add Reactions
+async function applyLobbyChannelPerms(guild, channelId, roleId) {
+  if (!channelId || !roleId) return;
+  try {
+    const channel = await guild.channels.fetch(channelId);
+    if (!channel) return;
+
+    // Deny @everyone from viewing the channel
+    await channel.permissionOverwrites.edit(guild.roles.everyone, {
+      ViewChannel: false,
+    });
+
+    // Grant the lobby role the required permissions
+    await channel.permissionOverwrites.edit(roleId, {
+      ViewChannel:        true,
+      ReadMessageHistory: true,
+      AddReactions:       true,
+    });
+  } catch (err) {
+    console.error(`⚠️ applyLobbyChannelPerms error (ch:${channelId} role:${roleId}):`, err.message);
+  }
+}
 
 function buildStepMenu(settings) {
   const numLobbies = settings.lobbies || 4;
@@ -192,6 +218,11 @@ module.exports = {
           continue;
         }
         setLobbyConfig(interaction.guildId, { [letter]: { ...getLobbyConfig(interaction.guildId)[letter], channel_id: j.values[0] } });
+        // Apply perms if both channel and role are now set
+        const updatedLc = getLobbyConfig(interaction.guildId)[letter] || {};
+        if (updatedLc.channel_id && updatedLc.role_id) {
+          await applyLobbyChannelPerms(interaction.guild, updatedLc.channel_id, updatedLc.role_id);
+        }
         const r = fresh();
         await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
@@ -218,6 +249,11 @@ module.exports = {
           continue;
         }
         setLobbyConfig(interaction.guildId, { [letter]: { ...getLobbyConfig(interaction.guildId)[letter], role_id: j.values[0] } });
+        // Apply perms if both channel and role are now set
+        const updatedLc2 = getLobbyConfig(interaction.guildId)[letter] || {};
+        if (updatedLc2.channel_id && updatedLc2.role_id) {
+          await applyLobbyChannelPerms(interaction.guild, updatedLc2.channel_id, updatedLc2.role_id);
+        }
         const r = fresh();
         await j.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
