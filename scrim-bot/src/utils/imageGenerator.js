@@ -173,7 +173,7 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath, 
       drawText(ctx, t.placement_pts, L.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      L.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         L.total, y, NORMAL, accentColor, 'center');
-      if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZL, y, t.wins, 3);
+      if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZL, y, t.wins, accentColor);
     }
     if (i < rightTeams.length) {
       const t = rightTeams[i];
@@ -182,7 +182,7 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath, 
       drawText(ctx, t.placement_pts, R.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      R.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         R.total, y, NORMAL, accentColor, 'center');
-      if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZR, y, t.wins, 3);
+      if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZR, y, t.wins, accentColor);
     }
   }
 }
@@ -211,14 +211,34 @@ async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath
     drawText(ctx, t.placement_pts, C.place, y, NORMAL, fontColor,   'center');
     drawText(ctx, t.kill_pts,      C.kills, y, NORMAL, fontColor,   'center');
     drawText(ctx, t.total,         C.total, y, NORMAL, accentColor, 'center');
-    if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoStartX, y, t.wins, logoGap);
+    if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoStartX, y, t.wins, accentColor);
   }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function drawLogos(ctx, logo, lw, lh, startX, midY, count, gap) {
-  const topY = midY - Math.floor(lh / 2);
-  for (let n = 0; n < count; n++) ctx.drawImage(logo, startX + n*(lw+gap), topY, lw, lh);
+function drawLogos(ctx, logo, lw, lh, startX, midY, count, fontColor) {
+  const topY  = midY - Math.floor(lh / 2);
+  const tight = 2; // px gap between logos
+
+  if (count > 3) {
+    // Show single logo + "x{count}" label right next to it
+    ctx.drawImage(logo, startX, topY, lw, lh);
+    const labelFont = `${Math.round(lh * 0.7)}px "ScrimFont"`;
+    ctx.save();
+    ctx.font         = labelFont;
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle    = 'rgba(0,0,0,0.7)';
+    ctx.fillText(`x${count}`, startX + lw + 3, midY + 1);
+    ctx.fillStyle    = fontColor || '#FFD700';
+    ctx.fillText(`x${count}`, startX + lw + 2, midY);
+    ctx.restore();
+  } else {
+    // Show up to 3 logos tightly packed
+    for (let n = 0; n < count; n++) {
+      ctx.drawImage(logo, startX + n * (lw + tight), topY, lw, lh);
+    }
+  }
 }
 
 function scaleX(obj, TW) {
