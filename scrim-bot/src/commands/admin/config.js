@@ -8,11 +8,6 @@ const { getConfig, setConfig, getScrimSettings, setScrimSettings, getLobbyConfig
 const { errorEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 
-function extractSheetId(url) {
-  const m = (url || '').match(/\/d\/([a-zA-Z0-9-_]+)/);
-  return m ? m[1] : null;
-}
-
 const CHANNEL_FIELDS = {
   register_channel:    'Registration Channel',
   slotlist_channel:    'Slot Allocation Channel',
@@ -31,7 +26,7 @@ const ROLE_FIELDS = {
 
 function buildStepMenu(settings) {
   const numLobbies = settings.lobbies || 4;
-  const lobbyOptions = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies).flatMap(l => [
+  const lobbyOptions = ['A','B','C','D','E','F'].slice(0, numLobbies).flatMap(l => [
     { label: `Lobby ${l} - Channel`, value: `lobby_channel_${l}`, description: `Private channel for Lobby ${l}` },
     { label: `Lobby ${l} - Role`,    value: `lobby_role_${l}`,    description: `Role for Lobby ${l} access` },
   ]);
@@ -56,15 +51,15 @@ function buildStepMenu(settings) {
         { label: 'Slot Holder Role',        value: 'slot_role',           description: 'Given when registered' },
         { label: 'Waitlist Role',           value: 'waitlist_role',       description: 'Given to waitlisted teams' },
         { label: 'Google Sheet URL',        value: 'sheet_url',           description: 'Link to Google Sheet' },
-        { label: '🔄 Reset Sheet Link',     value: 'reset_sheet',         description: 'Clear sheet link so /link generates a new one' },
         { label: 'Results Template Image',   value: 'results_template',    description: 'Upload background image for /results' },
+        { label: 'Results Font Colour',      value: 'results_font_color',  description: 'Text colour for /results overlay (hex e.g. #FFFFFF)' },
         { label: 'View Current Config',     value: 'view_config',         description: 'See full configuration' },
       ])
   );
 
   const lobbyMenu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId('config_step_lobby')
+      .setCustomId('config_step')
       .setPlaceholder('Lobby Channels & Roles')
       .addOptions(lobbyOptions)
   );
@@ -82,7 +77,7 @@ function buildConfigEmbed(config, settings, lobbyConf) {
   const ro = id => id ? `<@&${id}>` : '`Not Set`';
   const numLobbies    = settings.lobbies || 4;
   const slotsPerLobby = settings.slots_per_lobby || 24;
-  const lobbyLetters  = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+  const lobbyLetters  = ['A','B','C','D','E','F'].slice(0, numLobbies);
 
   const lobbyLines = lobbyLetters.map(l => {
     const lc = lobbyConf[l] || {};
@@ -126,6 +121,7 @@ function buildConfigEmbed(config, settings, lobbyConf) {
         ].join('\n'), inline: false,
       },
       { name: '📊 Google Sheet', value: config.sheet_url ? `[Open Sheet](${config.sheet_url})` : '`Not Set`', inline: false },
+      { name: '🎨 Results Colours', value: `Text: \`${config.results_font_color || '#FFFFFF'}\`  Accent: \`${config.results_accent_color || '#FFD700'}\``, inline: false },
     )
     .setTimestamp();
 }
@@ -333,15 +329,46 @@ module.exports = {
         }
         continue;
 
-      // ── Reset Sheet Link ──────────────────────────────────────────────────
-      } else if (value === 'reset_sheet') {
-        setConfig(interaction.guildId, { sheet_url: null, spreadsheet_id: null });
+      // ── Results font colour modal ────────────────────────────────────────
+      } else if (value === 'results_font_color') {
+        await i.showModal(
+          new ModalBuilder().setCustomId('config_font_color_modal').setTitle('🎨 Results Font Colour')
+            .addComponents(
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('font_color_input')
+                  .setLabel('Text colour (hex code)')
+                  .setStyle(TextInputStyle.Short)
+                  .setPlaceholder('#FFFFFF')
+                  .setRequired(true)
+                  .setValue(cfg.results_font_color || '#FFFFFF')
+              ),
+              new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                  .setCustomId('accent_color_input')
+                  .setLabel('Accent colour for rank & total (hex code)')
+                  .setStyle(TextInputStyle.Short)
+                  .setPlaceholder('#FFD700')
+                  .setRequired(true)
+                  .setValue(cfg.results_accent_color || '#FFD700')
+              )
+            )
+        );
+        let fc;
+        try {
+          fc = await interaction.awaitModalSubmit({ filter: m => m.customId === 'config_font_color_modal' && m.user.id === interaction.user.id, time: 60_000 });
+        } catch { continue; }
+        const rawFont   = fc.fields.getTextInputValue('font_color_input').trim();
+        const rawAccent = fc.fields.getTextInputValue('accent_color_input').trim();
+        const hexRe = /^#([0-9A-Fa-f]{6})$/;
+        if (!hexRe.test(rawFont) || !hexRe.test(rawAccent)) {
+          await fc.reply({ content: '❌ Invalid hex colour — use format `#RRGGBB` (e.g. `#FFFFFF`)', ephemeral: true });
+          continue;
+        }
+        await fc.deferUpdate();
+        setConfig(interaction.guildId, { results_font_color: rawFont, results_accent_color: rawAccent });
         const r = fresh();
-        await i.update({
-          content: '✅ Sheet link cleared. Use `/link` to generate a new sheet.',
-          embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)],
-          components: [...buildStepMenu(r.settings)],
-        });
+        await interaction.editReply({ content: null, embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
         continue;
 
       // ── Sheet URL modal ──────────────────────────────────────────────────
@@ -357,7 +384,7 @@ module.exports = {
         let m;
         try { m = await interaction.awaitModalSubmit({ filter: x => x.customId === 'config_sheet_modal' && x.user.id === interaction.user.id, time: 120_000 }); }
         catch { continue; }
-        setConfig(interaction.guildId, { sheet_url: m.fields.getTextInputValue('sheet_url_input'), spreadsheet_id: extractSheetId(m.fields.getTextInputValue('sheet_url_input')) });
+        setConfig(interaction.guildId, { sheet_url: m.fields.getTextInputValue('sheet_url_input') });
         const r = fresh();
         await m.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
