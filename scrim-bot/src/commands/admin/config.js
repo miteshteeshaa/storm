@@ -51,14 +51,10 @@ async function applyLobbyChannelPerms(guild, channelId, roleId) {
 }
 
 function buildStepMenu(settings) {
-  const numLobbies = settings.lobbies || 4;
-  // Generate A-Z dynamically so any number of lobbies (up to 26) is supported
-  const LOBBY_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
-  const lobbyOptions = LOBBY_LETTERS.slice(0, numLobbies).flatMap(l => [
-    { label: `Lobby ${l} - Channel`, value: `lobby_channel_${l}`, description: `Private channel for Lobby ${l}` },
-    { label: `Lobby ${l} - Role`,    value: `lobby_role_${l}`,    description: `Role for Lobby ${l} access` },
-  ]);
+  const numLobbies = Math.min(settings.lobbies || 4, 10);
+  const LOBBY_LETTERS = Array.from({ length: numLobbies }, (_, i) => String.fromCharCode(65 + i));
 
+  // Main general settings menu (19 options — well under 25 limit)
   const mainMenu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId('config_step')
@@ -66,7 +62,7 @@ function buildStepMenu(settings) {
       .addOptions([
         { label: 'Scrim Name',              value: 'scrim_name',          description: 'Name of the scrim event' },
         { label: 'Number of Lobbies',       value: 'lobbies',             description: 'How many lobbies (A, B, C...)' },
-        { label: 'Slots Per Lobby',         value: 'slots_per_lobby',     description: 'How many slots in EACH lobby (e.g. 24)' },
+        { label: 'Slots Per Lobby',         value: 'slots_per_lobby',     description: 'How many slots in EACH lobby (max 25)' },
         { label: 'First Slot Number',       value: 'first_slot',          description: 'Starting slot number per lobby' },
         { label: 'Registration Channel',    value: 'register_channel',    description: 'Where teams submit /register' },
         { label: 'Slot Allocation Channel', value: 'slotlist_channel',    description: 'Where team cards are posted for admin' },
@@ -79,21 +75,39 @@ function buildStepMenu(settings) {
         { label: 'Slot Holder Role',        value: 'slot_role',           description: 'Given when registered' },
         { label: 'Waitlist Role',           value: 'waitlist_role',       description: 'Given to waitlisted teams' },
         { label: 'Google Sheet URL',        value: 'sheet_url',           description: 'Link to Google Sheet' },
-        { label: 'Results Template Image',   value: 'results_template',    description: 'Upload background image for /results' },
-        { label: 'Results Font Colour',      value: 'results_font_color',  description: 'Text colour for /results overlay (hex e.g. #FFFFFF)' },
-        { label: 'Chicken Dinner Logo',      value: 'chicken_dinner_logo', description: 'Upload logo shown for #1 finish teams on /results' },
+        { label: 'Results Template Image',  value: 'results_template',    description: 'Upload background image for /results' },
+        { label: 'Results Font Colour',     value: 'results_font_color',  description: 'Text colour for /results overlay (hex e.g. #FFFFFF)' },
+        { label: 'Chicken Dinner Logo',     value: 'chicken_dinner_logo', description: 'Upload logo shown for #1 finish teams on /results' },
         { label: 'View Current Config',     value: 'view_config',         description: 'See full configuration' },
       ])
   );
 
-  const lobbyMenu = new ActionRowBuilder().addComponents(
+  // Lobby CHANNEL menu — max 10 options (one per lobby)
+  const lobbyChannelMenu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId('config_step_lobby')
-      .setPlaceholder('Lobby Channels & Roles')
-      .addOptions(lobbyOptions)
+      .setCustomId('config_step_lobby_channel')
+      .setPlaceholder('Set Lobby Channels')
+      .addOptions(LOBBY_LETTERS.map(l => ({
+        label: `Lobby ${l} — Channel`,
+        value: `lobby_channel_${l}`,
+        description: `Private channel for Lobby ${l}`,
+      })))
   );
 
-  return [mainMenu, lobbyMenu];
+  // Lobby ROLE menu — max 10 options (one per lobby)
+  const lobbyRoleMenu = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId('config_step_lobby_role')
+      .setPlaceholder('Set Lobby Roles')
+      .addOptions(LOBBY_LETTERS.map(l => ({
+        label: `Lobby ${l} — Role`,
+        value: `lobby_role_${l}`,
+        description: `Role for Lobby ${l} access`,
+      })))
+  );
+
+  // Discord allows max 5 action rows per message
+  return [mainMenu, lobbyChannelMenu, lobbyRoleMenu];
 }
 function buildBackRow() {
   return new ActionRowBuilder().addComponents(
@@ -262,7 +276,7 @@ module.exports = {
         const labels = {
           scrim_name:     ['Scrim Name',        'e.g. SUNGOLD LEAGUE', stg.scrim_name != null ? String(stg.scrim_name) : 'SCRIM'],
           lobbies:        ['Number of Lobbies', 'e.g. 2',              stg.lobbies != null ? String(stg.lobbies) : '4'],
-          slots_per_lobby:['Slots Per Lobby',   'e.g. 24',             stg.slots_per_lobby != null ? String(stg.slots_per_lobby) : '24'],
+          slots_per_lobby:['Slots Per Lobby',   'e.g. 25',             stg.slots_per_lobby != null ? String(stg.slots_per_lobby) : '25'],
           first_slot:     ['First Slot Number', 'e.g. 1',              stg.first_slot != null ? String(stg.first_slot) : '1'],
         };
         const [label, placeholder, currentVal] = labels[value];
@@ -288,6 +302,11 @@ module.exports = {
           if (value === 'lobbies' && num > 10) {
             await m.deferUpdate();
             await interaction.editReply({ content: '❌ Maximum number of lobbies is **10** (A–J).', embeds: [], components: [] });
+            continue;
+          }
+          if (value === 'slots_per_lobby' && num > 25) {
+            await m.deferUpdate();
+            await interaction.editReply({ content: '❌ Maximum slots per lobby is **25**.', embeds: [], components: [] });
             continue;
           }
           setScrimSettings(interaction.guildId, { [value]: num });
