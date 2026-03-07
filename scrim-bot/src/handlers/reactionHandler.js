@@ -6,19 +6,18 @@ const {
 } = require('../utils/database');
 
 // ── In-memory stores ──────────────────────────────────────────────────────────
-const confirmSessions   = new Map(); // guildId → array of { confirmMessageId, channelId }
+const confirmSessions = new Map(); // guildId → array of { confirmMessageId, channelId, lobbyLetter }
 
-function registerConfirmSession(guildId, confirmMessageId, channelId, _unused) {
+function registerConfirmSession(guildId, confirmMessageId, channelId, lobbyLetter) {
   const existing = confirmSessions.get(guildId) || [];
-  // Replace session for this channel if already exists
   const idx = existing.findIndex(s => s.channelId === channelId);
-  if (idx >= 0) existing[idx] = { confirmMessageId, channelId };
-  else existing.push({ confirmMessageId, channelId });
+  const session = { confirmMessageId, channelId, lobbyLetter };
+  if (idx >= 0) existing[idx] = session;
+  else existing.push(session);
   confirmSessions.set(guildId, existing);
 }
 function getConfirmSessions(guildId) { return confirmSessions.get(guildId) || []; }
-// Keep legacy getter for any other callers
-function getConfirmSession(guildId) { return getConfirmSessions(guildId)[0] || null; }
+function getConfirmSession(guildId)  { return getConfirmSessions(guildId)[0] || null; }
 
 const persistentSlotIds = new Map();
 const teamCardMap       = new Map();
@@ -333,19 +332,26 @@ async function handleReactionAdd(reaction, user) {
   }
 
   // ── TEAM confirming on /confirm message ───────────────────────────────────
-  // Check all registered sessions (one per lobby channel)
-  const sessions = getConfirmSessions(guild.id);
-  const session  = sessions.find(s => s.confirmMessageId === message.id);
+  const sessions   = getConfirmSessions(guild.id);
+  const session    = sessions.find(s => s.confirmMessageId === message.id);
   if (!session) return;
-  if (emoji !== '✅' && emoji !== '❌') return;
+  if (emoji !== '✅' && emoji !== '❌') {
+    try { await reaction.users.remove(user.id); } catch {}
+    return;
+  }
 
-  const config      = getConfig(guild.id);
-  const settings    = getScrimSettings(guild.id);
-  const lobbyConf   = getLobbyConfig(guild.id);
-  const data        = getRegistrations(guild.id);
-  const teamIndex   = data.slots.findIndex(t => t.captain_id === user.id || t.manager_id === user.id);
+  const config    = getConfig(guild.id);
+  const settings  = getScrimSettings(guild.id);
+  const lobbyConf = getLobbyConfig(guild.id);
+  const data      = getRegistrations(guild.id);
+
+  // Only the registered captain or manager of a team in THIS lobby can react
+  const teamIndex = data.slots.findIndex(t =>
+    (t.captain_id === user.id || t.manager_id === user.id) &&
+    t.lobby === session.lobbyLetter
+  );
   if (teamIndex === -1) {
-    // Not a registered captain/manager — remove their reaction silently
+    // Not a registered captain/manager for this lobby — remove their reaction
     try { await reaction.users.remove(user.id); } catch {}
     return;
   }
@@ -353,11 +359,9 @@ async function handleReactionAdd(reaction, user) {
   if (emoji === '✅') {
     data.slots[teamIndex].confirmed = true;
   } else {
+    // ❌ = mark as cancelled (crossed out) — admin will manually remove from slot list
     data.slots[teamIndex].confirmed = false;
   }
-
-  // Always remove the user's reaction so the count stays clean
-  try { await reaction.users.remove(user.id); } catch {}
 
   setRegistrations(guild.id, data);
   // Update the persistent slot list in all lobby channels (underline/strikethrough)
