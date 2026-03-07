@@ -311,28 +311,39 @@ async function handleReactionAdd(reaction, user) {
           : Promise.resolve(),
       ]);
 
-      // Everything else in background — doesn't block the update
-      Promise.all([
-        // Remove other lobby reactions
-        ...LOBBY_EMOJI_LIST.filter(le => le !== emoji).map(le => {
-          const r = message.reactions.cache.find(r => r.emoji.name === le);
-          return r ? r.users.remove(user.id).catch(() => {}) : Promise.resolve();
-        }),
-        // Remove old lobby role
-        prevLobby && prevLobby !== newLobby && lobbyConf[prevLobby]?.role_id
-          ? Promise.all((team.players || [team.manager_id, team.captain_id]).map(pid =>
-              guild.members.fetch(pid).then(m => m.roles.remove(lobbyConf[prevLobby].role_id)).catch(() => {})
-            ))
-          : Promise.resolve(),
-        // Add new lobby role
-        lobbyConf[newLobby]?.role_id
-          ? Promise.all((team.players || [team.manager_id, team.captain_id]).map(pid =>
-              guild.members.fetch(pid).then(m => m.roles.add(lobbyConf[newLobby].role_id)).catch(() => {})
-            ))
-          : Promise.resolve(),
+      // Background: clean up reactions, roles, sheet
+      (async () => {
+        try {
+          // ── If slot was successfully assigned: remove ALL reactions then add ❌ only
+          if (team.lobby_slot) {
+            await message.reactions.removeAll().catch(() => {});
+            await message.react('❌').catch(() => {});
+          } else {
+            // Lobby full — just remove the other lobby letter reactions, keep this one
+            for (const le of LOBBY_EMOJI_LIST.filter(le => le !== emoji)) {
+              const r = message.reactions.cache.find(r => r.emoji.name === le);
+              if (r) await r.users.remove(user.id).catch(() => {});
+            }
+          }
+        } catch {}
+
+        // Role management
+        try {
+          if (prevLobby && prevLobby !== newLobby && lobbyConf[prevLobby]?.role_id) {
+            for (const pid of (team.players || [team.manager_id, team.captain_id])) {
+              guild.members.fetch(pid).then(m => m.roles.remove(lobbyConf[prevLobby].role_id)).catch(() => {});
+            }
+          }
+          if (lobbyConf[newLobby]?.role_id) {
+            for (const pid of (team.players || [team.manager_id, team.captain_id])) {
+              guild.members.fetch(pid).then(m => m.roles.add(lobbyConf[newLobby].role_id)).catch(() => {});
+            }
+          }
+        } catch {}
+
         // Sheet sync
-        syncSheet(guild, config, data),
-      ]).catch(() => {});
+        syncSheet(guild, config, data).catch(() => {});
+      })();
       return;
     }
 
@@ -397,10 +408,10 @@ async function handleReactionRemove(reaction, user) {
     const config  = getConfig(guild.id);
     const member  = await guild.members.fetch(user.id).catch(() => null);
     if (!member) return;
-    const isAdmin = member.permissions.has('Administrator') ||
+    const isAdminUser = member.permissions.has('Administrator') ||
                     guild.ownerId === user.id ||
                     (config.admin_role && member.roles.cache.has(config.admin_role));
-    if (!isAdmin) return;
+    if (!isAdminUser) return;
 
     const data      = getRegistrations(guild.id);
     const settings  = getScrimSettings(guild.id);
@@ -408,28 +419,44 @@ async function handleReactionRemove(reaction, user) {
     const team      = data.slots[cardInfo.teamIndex];
     if (!team) return;
 
-    // Removing a lobby letter emoji = unassign the lobby (and auto-assigned slot)
-    if (LOBBY_EMOJIS[emoji] !== undefined && team.lobby === LOBBY_EMOJIS[emoji]) {
-      const lc = lobbyConf[team.lobby];
-      if (lc?.role_id) {
+    // ── Admin removes ❌ = unassign slot & lobby, restore lobby letter emojis ──
+    if (emoji === '❌') {
+      const oldLobby = team.lobby;
+      // Remove lobby role from all players
+      if (oldLobby && lobbyConf[oldLobby]?.role_id) {
         for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
           try {
             const m = await guild.members.fetch(playerId);
-            await m.roles.remove(lc.role_id).catch(() => {});
+            await m.roles.remove(lobbyConf[oldLobby].role_id).catch(() => {});
           } catch {}
         }
       }
       delete team.lobby;
-      delete team.lobby_slot; // slot was auto-assigned with lobby, clear both together
+      delete team.lobby_slot;
+
+      data.slots[cardInfo.teamIndex] = team;
+      setRegistrations(guild.id, data);
+      await updateTeamCardEmbed(message, team);
+      await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+      await syncSheet(guild, config, data);
+
+      // Restore lobby letter emojis — remove ❌ then re-add all configured lobby letters
+      try {
+        await message.reactions.removeAll();
+        const numLobbies = settings.lobbies || 4;
+        for (let idx = 0; idx < numLobbies; idx++) {
+          const name = LOBBY_EMOJI_LIST[idx];
+          const id   = LOBBY_EMOJI_IDS[name];
+          await message.react(`${name}:${id}`).catch(() => {});
+          await new Promise(r => setTimeout(r, 150));
+        }
+      } catch {}
+      return;
     }
 
+    // Removing a lobby letter emoji — no-op (lobby letters are bot-managed now)
     // No slot emoji handling — slots are assigned automatically, not via emoji
 
-    data.slots[cardInfo.teamIndex] = team;
-    setRegistrations(guild.id, data);
-    await updateTeamCardEmbed(message, team);
-    await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-    await syncSheet(guild, config, data);
     return;
   }
 
