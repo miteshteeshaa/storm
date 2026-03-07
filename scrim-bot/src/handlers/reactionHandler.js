@@ -42,14 +42,53 @@ const LOBBY_EMOJIS = {
 };
 const LOBBY_EMOJI_LIST = ['🇦','🇧','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'];
 
-// Maps custom godsent emoji name → slot number (1-25)
+// Maps custom emoji name → slot number (1-30)
+// ⚠️ After uploading the emoji pack to your Discord server, replace each ID below
+// with the actual Discord emoji ID (right-click emoji → Copy ID in developer mode)
 const SLOT_EMOJIS = {
-  'godsent_01': 1,  'godsent_02': 2,  'godsent_03': 3,  'godsent_04': 4,  'godsent_05': 5,
-  'godsent_06': 6,  'godsent_07': 7,  'godsent_08': 8,  'godsent_09': 9,  'godsent_10': 10,
-  'godsent_11': 11, 'godsent_12': 12, 'godsent_13': 13, 'godsent_14': 14, 'godsent_15': 15,
-  'godsent_16': 16, 'godsent_17': 17, 'godsent_18': 18, 'godsent_19': 19, 'godsent_20': 20,
-  'godsent_21': 21, 'godsent_22': 22, 'godsent_23': 23, 'godsent_24': 24, 'godsent_25': 25,
+  'num_01': 1,  'num_02': 2,  'num_03': 3,  'num_04': 4,  'num_05': 5,
+  'num_06': 6,  'num_07': 7,  'num_08': 8,  'num_09': 9,  'num_10': 10,
+  'num_11': 11, 'num_12': 12, 'num_13': 13, 'num_14': 14, 'num_15': 15,
+  'num_16': 16, 'num_17': 17, 'num_18': 18, 'num_19': 19, 'num_20': 20,
+  'num_21': 21, 'num_22': 22, 'num_23': 23, 'num_24': 24, 'num_25': 25,
+  'num_26': 26, 'num_27': 27, 'num_28': 28, 'num_29': 29, 'num_30': 30,
 };
+
+// Emoji IDs for reacting on team cards — must match SLOT_EMOJIS names above
+// Format: { name, id } where id is the Discord snowflake from your server
+// ⚠️ Fill in these IDs after uploading the emoji pack to your Discord server
+const SLOT_EMOJI_LIST = [
+  { name: 'num_01', id: 'REPLACE_ME' },
+  { name: 'num_02', id: 'REPLACE_ME' },
+  { name: 'num_03', id: 'REPLACE_ME' },
+  { name: 'num_04', id: 'REPLACE_ME' },
+  { name: 'num_05', id: 'REPLACE_ME' },
+  { name: 'num_06', id: 'REPLACE_ME' },
+  { name: 'num_07', id: 'REPLACE_ME' },
+  { name: 'num_08', id: 'REPLACE_ME' },
+  { name: 'num_09', id: 'REPLACE_ME' },
+  { name: 'num_10', id: 'REPLACE_ME' },
+  { name: 'num_11', id: 'REPLACE_ME' },
+  { name: 'num_12', id: 'REPLACE_ME' },
+  { name: 'num_13', id: 'REPLACE_ME' },
+  { name: 'num_14', id: 'REPLACE_ME' },
+  { name: 'num_15', id: 'REPLACE_ME' },
+  { name: 'num_16', id: 'REPLACE_ME' },
+  { name: 'num_17', id: 'REPLACE_ME' },
+  { name: 'num_18', id: 'REPLACE_ME' },
+  { name: 'num_19', id: 'REPLACE_ME' },
+  { name: 'num_20', id: 'REPLACE_ME' },
+  { name: 'num_21', id: 'REPLACE_ME' },
+  { name: 'num_22', id: 'REPLACE_ME' },
+  { name: 'num_23', id: 'REPLACE_ME' },
+  { name: 'num_24', id: 'REPLACE_ME' },
+  { name: 'num_25', id: 'REPLACE_ME' },
+  { name: 'num_26', id: 'REPLACE_ME' },
+  { name: 'num_27', id: 'REPLACE_ME' },
+  { name: 'num_28', id: 'REPLACE_ME' },
+  { name: 'num_29', id: 'REPLACE_ME' },
+  { name: 'num_30', id: 'REPLACE_ME' },
+];
 
 // Unicode circled numbers for slot display (works in every server, no custom emojis needed)
 const SLOT_DISPLAY = {
@@ -254,9 +293,6 @@ async function handleReactionAdd(reaction, user) {
       team.lobby = newLobby;
       // Auto-assign next available slot when lobby is first set
       if (!team.lobby_slot || prevLobby !== newLobby) {
-        // Save current team state first so nextAvailableSlot sees up-to-date data
-        data.slots[cardInfo.teamIndex] = team;
-        setRegistrations(guild.id, data);
         const autoSlot = nextAvailableSlot(data.slots, newLobby, settings);
         if (autoSlot) team.lobby_slot = autoSlot;
         else delete team.lobby_slot;
@@ -562,14 +598,9 @@ async function updateTeamCardEmbed(message, team) {
       ? `🏟️ Lobby **${team.lobby}**${team.lobby_slot ? `  •  🎯 Slot **${team.lobby_slot}**` : '  •  ⏳ slot pending'}`
       : '⏳ Unassigned';
 
-    // Strip any previously appended lobby/slot line to avoid duplicates
-    const baseDescription = (old.description || '')
-      .replace(/\n\n(🏟️|⏳ Unassigned).*$/s, '')
-      .trimEnd();
-
     const updated = EmbedBuilder.from(old)
       .setColor(team.lobby && team.lobby_slot ? 0x00FF7F : team.lobby ? 0xFFAA00 : 0x5865F2)
-      .setDescription(`${baseDescription}\n\n${lobbyText}`)
+      .setDescription(`${old.description || ''}\n\n${lobbyText}`)
       .setFooter({ text: old.footer?.text?.split(' |')[0] || '' });
     await message.edit({ embeds: [updated] });
   } catch {}
@@ -587,4 +618,5 @@ module.exports = {
   getPersistentSlotListId,
   setPersistentSlotListId,
   refreshAllSlotLists,
+  SLOT_EMOJI_LIST,
 };
