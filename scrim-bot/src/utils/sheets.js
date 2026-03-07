@@ -93,15 +93,16 @@ function buildValueRows(slotsPerLobby, numMatches) {
   // Row 2: sub-headers
   const subHeaders = [];
   for (let m = 0; m < numMatches; m++) subHeaders.push('Place', 'Kills');
-  const row2 = ['1 kill = 1pt', '', '', '', '', '', ...subHeaders, '', '', ''];
+  const row2 = ['Position', 'Pts  |  1kill=1pt', '', '', '', '', ...subHeaders, '', '', ''];
 
   // Data rows (slot 1 .. slotsPerLobby)
   const rows = [row1, row2];
   for (let s = 1; s <= slotsPerLobby; s++) {
-    const label    = s === 1 ? '1st' : s === 2 ? '2nd' : s === 3 ? '3rd' : `${s}${ordinal(s)}`;
     const placePts = PLACEMENT_POINTS[s - 1] ?? 0;
-    // Columns A,B = scoring table; C = gap; D = slot; E,F = team data (blank); match cols = blank
-    rows.push([label, placePts, '', s, '', '', ...new Array(numMatches * 2).fill('')]);
+    // Col A = position NUMBER (so VLOOKUP matches numeric placement input)
+    // Col B = points value
+    // Col C = gap; Col D = slot; Col E,F = team data
+    rows.push([s, placePts, '', s, '', '', ...new Array(numMatches * 2).fill('')]);
   }
   return rows;
 }
@@ -475,7 +476,7 @@ async function syncTeamsToSheet(spreadsheetId, slots) {
   });
 }
 
-// ── Clear team names from specific lobby tab(s), or all tabs ─────────────────
+// ── Clear team names AND all match data from specific lobby tab(s), or all tabs
 // lobbyLetters: array like ['A'] or null = clear all
 async function clearTeamsFromSheet(spreadsheetId, slotsPerLobby = 24, lobbyLetters = null) {
   if (!spreadsheetId) return;
@@ -491,23 +492,52 @@ async function clearTeamsFromSheet(spreadsheetId, slotsPerLobby = 24, lobbyLette
     return lobbyLetters.includes(letter);
   });
 
-  const empty      = Array.from({ length: slotsPerLobby }, () => ['']);
-  const updateData = [];
+  if (lobbySheets.length === 0) return;
 
-  for (const s of lobbySheets) {
-    const t = s.properties.title;
+  const emptyCol = Array.from({ length: slotsPerLobby }, () => ['']);
+
+  // For match data we need to know how many match columns exist — read the header row
+  for (const sheet of lobbySheets) {
+    const t = sheet.properties.title;
+    const updateData = [];
+
+    // Clear team name (E) and tag (F)
     updateData.push(
-      { range: `${t}!E3:E${2 + slotsPerLobby}`, values: empty },
-      { range: `${t}!F3:F${2 + slotsPerLobby}`, values: empty },
+      { range: `${t}!E3:E${2 + slotsPerLobby}`, values: emptyCol },
+      { range: `${t}!F3:F${2 + slotsPerLobby}`, values: emptyCol },
     );
+
+    // Detect how many match columns exist by reading row 1 from G onwards
+    try {
+      const headerRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${t}!G1:ZZ1` });
+      const headerRow = (headerRes.data.values || [[]])[0] || [];
+      let numMatches = 0;
+      for (let i = 0; i < headerRow.length; i += 2) {
+        if (!headerRow[i] || headerRow[i].toString().includes('TOTAL')) break;
+        numMatches++;
+      }
+
+      if (numMatches > 0) {
+        // Clear all Place + Kills columns (G to G + numMatches*2 - 1)
+        const firstMatchCol = 'G';
+        const lastMatchColIdx = 6 + numMatches * 2 - 1; // 0-based, G=6
+        const lastMatchCol = colLetter(lastMatchColIdx);
+        const emptyMatchRow = Array.from({ length: numMatches * 2 }, () => '');
+        const emptyMatchData = Array.from({ length: slotsPerLobby }, () => [...emptyMatchRow]);
+        updateData.push({
+          range: `${t}!${firstMatchCol}3:${lastMatchCol}${2 + slotsPerLobby}`,
+          values: emptyMatchData,
+        });
+      }
+    } catch (e) {
+      console.warn(`⚠️ Could not read headers for ${t}:`, e.message);
+    }
+
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: { valueInputOption: 'USER_ENTERED', data: updateData },
+    });
   }
-
-  if (updateData.length === 0) return;
-
-  await sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId,
-    requestBody: { valueInputOption:'USER_ENTERED', data: updateData },
-  });
 }
 
 // ── Read standings from lobby tab(s) ─────────────────────────────────────────
