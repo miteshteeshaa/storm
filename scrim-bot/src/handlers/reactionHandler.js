@@ -262,11 +262,11 @@ async function handleReactionAdd(reaction, user) {
       setRegistrations(guild.id, data);
       await updateTeamCardEmbed(message, team);
       await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-      await syncSheet(guild, config, data);
-
       if (team.lobby && team.lobby_slot && lobbyConf[team.lobby]?.channel_id) {
         await postToLobbyChannel(guild, team, lobbyConf, settings, data);
       }
+      // Sheet sync in background — don't block slot list update
+      syncSheet(guild, config, data).catch(() => {});
       return;
     }
 
@@ -320,11 +320,11 @@ async function handleReactionAdd(reaction, user) {
 
     await updateTeamCardEmbed(message, team);
     await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-    await syncSheet(guild, config, data);
-
     if (team.lobby && team.lobby_slot && lobbyConf[team.lobby]?.channel_id) {
       await postToLobbyChannel(guild, team, lobbyConf, settings, data);
     }
+    // Sheet sync in background
+    syncSheet(guild, config, data).catch(() => {});
     return;
   }
 
@@ -543,12 +543,15 @@ async function updateTeamCardEmbed(message, team) {
   try {
     const old = message.embeds[0];
     if (!old) return;
+
     const lobbyText = team.lobby
-      ? `Lobby **${team.lobby}**${team.lobby_slot ? ` — Slot **${team.lobby_slot}**` : ' *(slot pending)*'}`
-      : '*(unassigned)*';
+      ? `🏟️ Lobby **${team.lobby}**${team.lobby_slot ? `  •  🎯 Slot **${team.lobby_slot}**` : '  •  ⏳ slot pending'}`
+      : '⏳ Unassigned';
+
     const updated = EmbedBuilder.from(old)
-      .setColor(team.lobby && team.lobby_slot ? 0x00FF7F : 0x5865F2)
-      .setFooter({ text: `${old.footer?.text?.split(' |')[0] || ''} | ${lobbyText}` });
+      .setColor(team.lobby && team.lobby_slot ? 0x00FF7F : team.lobby ? 0xFFAA00 : 0x5865F2)
+      .setDescription(`${old.description || ''}\n\n${lobbyText}`)
+      .setFooter({ text: old.footer?.text?.split(' |')[0] || '' });
     await message.edit({ embeds: [updated] });
   } catch {}
 }
