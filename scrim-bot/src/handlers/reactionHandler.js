@@ -450,11 +450,18 @@ async function handleReactionAdd(reaction, user) {
     return;
   }
 
+  // Always remove the user's reaction immediately — keeps count at 1 (bot only)
+  try { await reaction.users.remove(user.id); } catch {}
+
+  const team = data.slots[teamIndex];
+  const prevConfirmed = team.confirmed;
+
   if (emoji === '✅') {
-    data.slots[teamIndex].confirmed = true;
+    // If already confirmed, toggle off (undo)
+    data.slots[teamIndex].confirmed = prevConfirmed === true ? null : true;
   } else {
-    // ❌ = mark as cancelled (crossed out) — admin will manually remove from slot list
-    data.slots[teamIndex].confirmed = false;
+    // If already cancelled, toggle off (undo)
+    data.slots[teamIndex].confirmed = prevConfirmed === false ? null : false;
   }
 
   setRegistrations(guild.id, data);
