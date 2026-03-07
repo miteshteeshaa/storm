@@ -26,7 +26,9 @@ const ROLE_FIELDS = {
 
 function buildStepMenu(settings) {
   const numLobbies = settings.lobbies || 4;
-  const lobbyOptions = ['A','B','C','D','E','F'].slice(0, numLobbies).flatMap(l => [
+  // Generate A-Z dynamically so any number of lobbies (up to 26) is supported
+  const LOBBY_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+  const lobbyOptions = LOBBY_LETTERS.slice(0, numLobbies).flatMap(l => [
     { label: `Lobby ${l} - Channel`, value: `lobby_channel_${l}`, description: `Private channel for Lobby ${l}` },
     { label: `Lobby ${l} - Role`,    value: `lobby_role_${l}`,    description: `Role for Lobby ${l} access` },
   ]);
@@ -60,7 +62,7 @@ function buildStepMenu(settings) {
 
   const lobbyMenu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId('config_step_lobby')
+      .setCustomId('config_step')
       .setPlaceholder('Lobby Channels & Roles')
       .addOptions(lobbyOptions)
   );
@@ -78,7 +80,9 @@ function buildConfigEmbed(config, settings, lobbyConf) {
   const ro = id => id ? `<@&${id}>` : '`Not Set`';
   const numLobbies    = settings.lobbies || 4;
   const slotsPerLobby = settings.slots_per_lobby || 24;
-  const lobbyLetters  = ['A','B','C','D','E','F'].slice(0, numLobbies);
+  // Generate A-Z dynamically so any number of lobbies (up to 26) is supported
+  const LOBBY_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+  const lobbyLetters  = LOBBY_LETTERS.slice(0, numLobbies);
 
   const lobbyLines = lobbyLetters.map(l => {
     const lc = lobbyConf[l] || {};
