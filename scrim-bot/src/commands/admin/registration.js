@@ -115,7 +115,7 @@ const confirmCmd = {
         'React below to confirm or cancel your slot:\n\n' +
         '✅ — Confirms your slot (__underlined__ in list)\n' +
         '❌ — Cancels your slot (~~crossed out~~ in list)\n\n' +
-        '*Only your registered manager/captain can react.*'
+        '*Only your registered manager/captain can react.*\n\u200b'
       )
       .setFooter({ text: `${settings.scrim_name} | Slot confirmation` });
 
