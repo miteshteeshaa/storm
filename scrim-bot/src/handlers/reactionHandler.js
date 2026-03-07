@@ -611,26 +611,19 @@ async function refreshConfirmList(guild, session, settings, data) {
 
 async function updateTeamCardEmbed(message, team) {
   try {
-    const old = message.embeds[0];
-    if (!old) return;
+    // Cards are plain text — extract base line (first line before any status suffix)
+    const baseContent = message.content?.split('\n')[0] || message.content || '';
+    // Strip any previously appended status
+    const baseLine = baseContent.replace(/\s*[\|—].*$/, '').trimEnd();
 
-    const basePlayers = old.description?.split('\n\n')[0] || old.description || '';
-    let desc = basePlayers;
-    let color = 0x5865F2; // blue = unassigned
-
+    let suffix = '';
     if (team.lobby && team.lobby_slot) {
-      color = 0x00FF7F; // green = fully assigned
-      desc = basePlayers + `\n\n✅ **Lobby ${team.lobby} — Slot ${team.lobby_slot}**`;
+      suffix = ` | ✅ Lobby ${team.lobby} · Slot ${team.lobby_slot}`;
     } else if (team.lobby) {
-      color = 0xFFAA00; // orange = lobby set but no slot (full)
-      desc = basePlayers + `\n\n⏳ **Lobby ${team.lobby} — No slot available**`;
+      suffix = ` | ⏳ Lobby ${team.lobby} · Full`;
     }
 
-    const updated = EmbedBuilder.from(old)
-      .setColor(color)
-      .setDescription(desc)
-      .setFooter({ text: old.footer?.text || '' });
-    await message.edit({ embeds: [updated] });
+    await message.edit({ content: baseLine + suffix });
   } catch {}
 }
 
