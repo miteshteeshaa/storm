@@ -276,11 +276,14 @@ const clearCmd = {
         try { await clearTeamsFromSheet(cfg.spreadsheet_id, stg.slots_per_lobby || 24, null); } catch (e) { console.error('Sheet clear error:', e.message); }
       }
 
-      // Purge channels
+      // Purge registration + slot allocation channels
       const regDeleted  = await purgeChannel(interaction.guild, config.register_channel);
       const slotDeleted = await purgeChannel(interaction.guild, config.slotlist_channel);
 
-      // Fresh slot lists
+      // Purge and repost fresh slot lists in all lobby channels
+      for (const l of lobbyLetters) {
+        if (lobbyConf[l]?.channel_id) await purgeChannel(interaction.guild, lobbyConf[l].channel_id);
+      }
       for (const l of lobbyLetters) await postFreshLobbySlotList(interaction.guild, l, lobbyConf, settings);
 
       return interaction.editReply({
