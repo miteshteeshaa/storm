@@ -108,6 +108,14 @@ function setSlotListIds(guildId, data) {
   writeDB('slot_list_ids', db);
 }
 
+function getTeamCards(guildId) { return readDB('team_cards')[guildId] || {}; }
+function setTeamCard(guildId, messageId, teamIndex) {
+  const db = readDB('team_cards');
+  if (!db[guildId]) db[guildId] = {};
+  db[guildId][messageId] = teamIndex;
+  writeDB('team_cards', db);
+}
+
 module.exports = {
   getServer, setServer,
   getConfig, setConfig,
@@ -117,4 +125,5 @@ module.exports = {
   getMatches, setMatch, clearMatches,
   getConfirmSessions, setConfirmSessions,
   getSlotListIds, setSlotListIds,
+  getTeamCards, setTeamCard,
 };
