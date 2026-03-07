@@ -20,9 +20,13 @@ function registerConfirmSession(guildId, confirmMessageId, channelId, slotListMe
 function getConfirmSession(guildId) { return confirmSessions.get(guildId) || null; }
 
 // ── Emoji maps ────────────────────────────────────────────────────────────────
-const LOBBY_EMOJIS = {
-  '🇦':'A', '🇧':'B', '🇨':'C', '🇩':'D', '🇪':'E',
-  '🇫':'F', '🇬':'G', '🇭':'H', '🇮':'I', '🇯':'J',
+// Maps custom godsent emoji name → slot number (1-25)
+const SLOT_EMOJIS = {
+  'godsent_01': 1,  'godsent_02': 2,  'godsent_03': 3,  'godsent_04': 4,  'godsent_05': 5,
+  'godsent_06': 6,  'godsent_07': 7,  'godsent_08': 8,  'godsent_09': 9,  'godsent_10': 10,
+  'godsent_11': 11, 'godsent_12': 12, 'godsent_13': 13, 'godsent_14': 14, 'godsent_15': 15,
+  'godsent_16': 16, 'godsent_17': 17, 'godsent_18': 18, 'godsent_19': 19, 'godsent_20': 20,
+  'godsent_21': 21, 'godsent_22': 22, 'godsent_23': 23, 'godsent_24': 24, 'godsent_25': 25,
 };
 
 function numEmoji(n) {
@@ -177,40 +181,40 @@ async function handleReactionAdd(reaction, user) {
 
     const prevLobby = team.lobby;
 
-    if (LOBBY_EMOJIS[emoji]) {
-      const newLobby = LOBBY_EMOJIS[emoji];
+    if (SLOT_EMOJIS[emoji] !== undefined) {
+      const slotNum = SLOT_EMOJIS[emoji];
 
-      // Remove old lobby role if switching lobbies
-      if (prevLobby && prevLobby !== newLobby && lobbyConf[prevLobby]?.role_id) {
-        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
-          try {
-            const m = await guild.members.fetch(playerId);
-            await m.roles.remove(lobbyConf[prevLobby].role_id).catch(() => {});
-          } catch {}
+      // If team already has a lobby assigned, keep it — just update the slot number.
+      // If no lobby yet, admin must assign lobby first via /config or another mechanism.
+      // For now: slot emoji sets the lobby_slot directly within the current lobby.
+      // If no lobby set yet, we can't assign — ignore.
+      if (!team.lobby) {
+        try { await reaction.users.remove(user.id); } catch {}
+        return;
+      }
+
+      const newLobby = team.lobby;
+
+      // Check slot isn't already taken by another team
+      const slotTaken = data.slots.find(
+        (t, idx) => idx !== cardInfo.teamIndex && t.lobby === newLobby && t.lobby_slot === slotNum
+      );
+      if (slotTaken) {
+        try { await reaction.users.remove(user.id); } catch {}
+        return;
+      }
+
+      // Remove other godsent emoji reactions from this card (only one slot at a time)
+      for (const emojiName of Object.keys(SLOT_EMOJIS)) {
+        if (emojiName !== emoji) {
+          const r = message.reactions.cache.find(r => r.emoji.name === emojiName);
+          if (r) try { await r.users.remove(user.id); } catch {}
         }
       }
 
-      // If switching to a different lobby, clear the old slot
-      if (prevLobby && prevLobby !== newLobby) {
-        delete team.lobby_slot;
-      }
+      team.lobby_slot = slotNum;
 
-      team.lobby = newLobby;
-
-      // ── AUTO-ASSIGN: find next available slot in this lobby ───────────────
-      if (!team.lobby_slot) {
-        const slot = nextAvailableSlot(data.slots, newLobby, settings);
-        if (slot !== null) {
-          team.lobby_slot = slot;
-        }
-      }
-
-      // Remove other lobby emoji reactions from this card
-      for (const e of Object.keys(LOBBY_EMOJIS)) {
-        if (e !== emoji) try { await message.reactions.cache.get(e)?.users.remove(user.id); } catch {}
-      }
-
-      // Add lobby role
+      // Add lobby role if configured
       if (lobbyConf[newLobby]?.role_id) {
         for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
           try {
@@ -221,7 +225,7 @@ async function handleReactionAdd(reaction, user) {
       }
 
     } else {
-      // Not a lobby emoji — ignore (number emojis removed, slots are auto-assigned)
+      // Not a slot emoji — ignore
       return;
     }
 
@@ -293,8 +297,8 @@ async function handleReactionRemove(reaction, user) {
     const team      = data.slots[cardInfo.teamIndex];
     if (!team) return;
 
-    // Removing lobby emoji = unassign from lobby entirely
-    if (LOBBY_EMOJIS[emoji] && team.lobby === LOBBY_EMOJIS[emoji]) {
+    // Removing a godsent slot emoji = unassign slot number from this team
+    if (SLOT_EMOJIS[emoji] !== undefined && team.lobby_slot === SLOT_EMOJIS[emoji]) {
       const lc = lobbyConf[team.lobby];
       if (lc?.role_id) {
         for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
@@ -304,7 +308,6 @@ async function handleReactionRemove(reaction, user) {
           } catch {}
         }
       }
-      delete team.lobby;
       delete team.lobby_slot;
     }
 
