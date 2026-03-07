@@ -4,9 +4,10 @@
 const {
   SlashCommandBuilder, AttachmentBuilder,
   ActionRowBuilder, ChannelSelectMenuBuilder, ChannelType,
+  StringSelectMenuBuilder, ButtonBuilder, ButtonStyle,
 } = require('discord.js');
-const { getConfig, getScrimSettings, getRegistrations } = require('../../utils/database');
-const { errorEmbed, infoEmbed } = require('../../utils/embeds');
+const { getConfig, getScrimSettings } = require('../../utils/database');
+const { errorEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 const { generateResultsImage } = require('../../utils/imageGenerator');
 const { getSheetStandings } = require('../../utils/sheets');
@@ -34,7 +35,6 @@ module.exports = {
     try {
       const config   = getConfig(interaction.guildId);
       const settings = getScrimSettings(interaction.guildId);
-      const data     = getRegistrations(interaction.guildId);
 
       // Check template exists
       const templatePath = config.results_template_path;
@@ -51,10 +51,50 @@ module.exports = {
         });
       }
 
-      await interaction.editReply({ embeds: [infoEmbed('⏳ Generating...', 'Fetching standings from Google Sheet...')] });
+      // ── Step 1: Ask which lobby (or all) ─────────────────────────────────
+      const numLobbies  = settings.lobbies || 4;
+      const lobbyLetters = ['A','B','C','D','E','F'].slice(0, numLobbies);
+
+      const lobbyOptions = [
+        { label: 'All Lobbies (combined)', value: 'ALL' },
+        ...lobbyLetters.map(l => ({ label: `Lobby ${l}`, value: l })),
+      ];
+
+      const lobbyRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('results_lobby_pick')
+          .setPlaceholder('Which lobby?')
+          .addOptions(lobbyOptions)
+      );
+
+      await interaction.editReply({
+        content: '**Step 1 — Select a lobby:**',
+        components: [lobbyRow],
+        embeds: [],
+      });
+
+      let lobbyPick;
+      try {
+        lobbyPick = await interaction.fetchReply().then(msg =>
+          msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 })
+        );
+      } catch {
+        await interaction.editReply({ content: 'Timed out.', components: [] });
+        return;
+      }
+
+      const lobbyValue = lobbyPick.values[0]; // 'ALL' or 'A', 'B', etc.
+      await lobbyPick.deferUpdate();
+
+      await interaction.editReply({
+        content: `⏳ Fetching standings for **${lobbyValue === 'ALL' ? 'All Lobbies' : `Lobby ${lobbyValue}`}**...`,
+        components: [],
+        embeds: [],
+      });
 
       // Pull standings from sheet
-      const standings = await getSheetStandings(config.spreadsheet_id, settings.slots_per_lobby || 24);
+      const lobbyFilter = lobbyValue === 'ALL' ? null : lobbyValue;
+      const standings = await getSheetStandings(config.spreadsheet_id, settings.slots_per_lobby || 24, lobbyFilter);
 
       if (!standings || standings.length === 0) {
         return interaction.editReply({ embeds: [errorEmbed('No Data', 'No match data found in the Google Sheet yet.')] });
