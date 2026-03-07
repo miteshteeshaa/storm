@@ -47,13 +47,6 @@ module.exports = {
         if (p && !players.find(x => x.id === p.id)) players.push(p);
       }
 
-      // ── Duplicate checks ──────────────────────────────────────────────────
-      const allTeams = [...data.slots, ...data.waitlist];
-      if (allTeams.find(t => t.team_tag.toLowerCase() === teamTag.toLowerCase()))
-        return interaction.reply({ embeds: [errorEmbed('Tag Taken', `**[${teamTag}]** is already registered.`)], ephemeral: true });
-      if (allTeams.find(t => t.team_name.toLowerCase() === teamName.toLowerCase()))
-        return interaction.reply({ embeds: [errorEmbed('Name Taken', `**${teamName}** is already registered.`)], ephemeral: true });
-
       const isWaitlist = data.slots.length >= settings.slots;
       const queueNum   = isWaitlist ? data.waitlist.length + 1 : data.slots.length + 1;
 
