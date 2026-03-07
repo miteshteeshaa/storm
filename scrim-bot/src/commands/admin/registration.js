@@ -104,20 +104,17 @@ const confirmCmd = {
 
     if (data.slots.length === 0) return interaction.reply({ embeds: [errorEmbed('No Teams', 'No registered teams.')], ephemeral: true });
 
-    // Build list of channels to post in:
-    // Start with the main slotlist channel, then add every configured lobby channel.
-    // Deduplicate so we don't post twice if a lobby channel == slotlist channel.
+    // Post confirm in every configured lobby channel only (not slot-allocation — that's admin-only)
     const channelIds = new Set();
-    if (config.slotlist_channel) channelIds.add(config.slotlist_channel);
 
     const numLobbies  = settings.lobbies || 4;
     const LOBBY_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
     for (const letter of LOBBY_LETTERS.slice(0, numLobbies)) {
-      const lobbyChId = lobbyConf[`lobby_channel_${letter}`];
+      const lobbyChId = lobbyConf[letter]?.channel_id;
       if (lobbyChId) channelIds.add(lobbyChId);
     }
 
-    if (channelIds.size === 0) return interaction.reply({ embeds: [errorEmbed('No Channels', 'Set a Slot Allocation channel or lobby channels in `/config`.')], ephemeral: true });
+    if (channelIds.size === 0) return interaction.reply({ embeds: [errorEmbed('No Lobby Channels', 'No lobby channels configured. Set them in `/config` → Lobby Channels & Roles.')], ephemeral: true });
 
     await interaction.deferReply({ ephemeral: true });
 
