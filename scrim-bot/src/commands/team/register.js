@@ -1,11 +1,17 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const {
-  getServer, getConfig, getRegistrations, setRegistrations, getScrimSettings
+  getConfig, getRegistrations, setRegistrations, getScrimSettings
 } = require('../../utils/database');
 const { errorEmbed } = require('../../utils/embeds');
 const { isActivated, isRegistrationOpen } = require('../../utils/permissions');
 const { syncTeamsToSheet } = require('../../utils/sheets');
 const { registerTeamCard } = require('../../handlers/reactionHandler');
+
+// Send an ephemeral error after a public defer — deletes the "thinking" bubble first
+async function replyError(interaction, embed) {
+  await interaction.deleteReply().catch(() => {});
+  return interaction.followUp({ embeds: [embed], flags: MessageFlags.Ephemeral });
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -20,35 +26,36 @@ module.exports = {
     .addUserOption(opt => opt.setName('player5').setDescription('Player 5').setRequired(false)),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    // Defer PUBLIC — this makes the slash command usage visible to everyone
+    await interaction.deferReply();
 
     try {
       if (!isActivated(interaction.guildId))
-        return interaction.editReply({ embeds: [errorEmbed('Bot Not Active', 'The scrim bot is not active.')] });
+        return replyError(interaction, errorEmbed('Bot Not Active', 'The scrim bot is not active.'));
       if (!isRegistrationOpen(interaction.guildId))
-        return interaction.editReply({ embeds: [errorEmbed('Registration Closed', 'Wait for admin to open registration.')] });
+        return replyError(interaction, errorEmbed('Registration Closed', 'Wait for admin to open registration.'));
 
       const config   = getConfig(interaction.guildId);
       const settings = getScrimSettings(interaction.guildId);
       const data     = getRegistrations(interaction.guildId);
 
-      const teamName  = interaction.options.getString('team_name');
-      const teamTag   = interaction.options.getString('team_tag').toUpperCase();
+      const teamName  = interaction.options.getString('team_name').trim().slice(0, 50);
+      const teamTag   = interaction.options.getString('team_tag').toUpperCase().trim();
       const manager   = interaction.options.getUser('manager');
       const captainId = interaction.user.id;
 
       const players = [manager];
-      for (const key of ['player2','player3','player4','player5']) {
+      for (const key of ['player2', 'player3', 'player4', 'player5']) {
         const p = interaction.options.getUser(key);
         if (p && !players.find(x => x.id === p.id)) players.push(p);
       }
 
-      // ── Duplicate checks ────────────────────────────────────────────────────
+      // ── Duplicate checks ──────────────────────────────────────────────────
       const allTeams = [...data.slots, ...data.waitlist];
       if (allTeams.find(t => t.team_tag.toLowerCase() === teamTag.toLowerCase()))
-        return interaction.editReply({ embeds: [errorEmbed('Tag Taken', `**[${teamTag}]** is already registered.`)] });
+        return replyError(interaction, errorEmbed('Tag Taken', `**[${teamTag}]** is already registered.`));
       if (allTeams.find(t => t.team_name.toLowerCase() === teamName.toLowerCase()))
-        return interaction.editReply({ embeds: [errorEmbed('Name Taken', `**${teamName}** is already registered.`)] });
+        return replyError(interaction, errorEmbed('Name Taken', `**${teamName}** is already registered.`));
 
       const isWaitlist = data.slots.length >= settings.slots;
       const queueNum   = isWaitlist ? data.waitlist.length + 1 : data.slots.length + 1;
@@ -68,7 +75,7 @@ module.exports = {
       else             data.waitlist.push(team);
       setRegistrations(interaction.guildId, data);
 
-      // ── Roles ───────────────────────────────────────────────────────────────
+      // ── Roles ─────────────────────────────────────────────────────────────
       try {
         const member = interaction.member;
         if (config.registered_role) await member.roles.add(config.registered_role).catch(() => {});
@@ -80,28 +87,12 @@ module.exports = {
         }
       } catch {}
 
-      // ── Sync to Google Sheet (silent — never block registration) ─────────
+      // ── Sync to Google Sheet (silent) ─────────────────────────────────────
       if (config.spreadsheet_id) {
         syncTeamsToSheet(config.spreadsheet_id, data.slots).catch(() => {});
       }
 
-      // ── Public confirmation in registration channel ─────────────────────
-      if (config.register_channel) {
-        try {
-          const regCh = await interaction.guild.channels.fetch(config.register_channel);
-          if (regCh) {
-            if (isWaitlist) {
-              // Waitlist: small text-only message
-              await regCh.send({ content: `⏳ **[${teamTag}] ${teamName}** added to waitlist #${queueNum}` });
-            } else {
-              // Slot confirmed: just a big ✅ — clean, minimal look
-              await regCh.send({ content: '✅' });
-            }
-          }
-        } catch {}
-      }
-
-      // ── Post team card in slot-allocation channel ───────────────────────
+      // ── Post team card in slot-allocation channel ─────────────────────────
       if (config.slotlist_channel && !isWaitlist) {
         try {
           const ch = await interaction.guild.channels.fetch(config.slotlist_channel);
@@ -119,7 +110,6 @@ module.exports = {
             const msg = await ch.send({ embeds: [card] });
             registerTeamCard(msg.id, interaction.guildId, teamIndex);
 
-            // Add lobby letter emojis based on configured lobby count
             const numLobbies  = settings.lobbies || 4;
             const lobbyEmojis = ['🇦','🇧','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'].slice(0, numLobbies);
             for (const e of lobbyEmojis) {
@@ -132,27 +122,18 @@ module.exports = {
         }
       }
 
-      // ── Private reply to registrant ─────────────────────────────────────
-      const playerMentions = players.map(p => `<@${p.id}>`).join(', ');
-      return interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(isWaitlist ? 0xFFAA00 : 0x00FF7F)
-            .setTitle(isWaitlist ? '⏳ Added to Waitlist' : '✅ Registered!')
-            .setDescription('Your team has been registered. **Admin will assign your lobby and slot.**')
-            .addFields(
-              { name: '🏷️ Team',    value: `[${teamTag}] ${teamName}`, inline: true },
-              { name: '📋 Queue #', value: `${queueNum}`,               inline: true },
-              { name: '👥 Players', value: playerMentions },
-            )
-            .setFooter({ text: 'You will receive your lobby role once admin assigns your slot.' })
-            .setTimestamp()
-        ]
-      });
+      // ── Public reply — the slash command + this reply are both visible ─────
+      if (isWaitlist) {
+        return interaction.editReply({
+          content: `⏳ **[${teamTag}] ${teamName}** added to waitlist #${queueNum}`,
+        });
+      } else {
+        return interaction.editReply({ content: '✅' });
+      }
 
     } catch (err) {
       console.error('❌ /register error:', err);
-      return interaction.editReply({ embeds: [errorEmbed('Error', err.message)] });
+      return replyError(interaction, errorEmbed('Error', err.message));
     }
   }
 };
