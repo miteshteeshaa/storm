@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { getServer, setServer, getConfig, getRegistrations, getScrimSettings } = require('../../utils/database');
+const { getServer, setServer, getConfig, getRegistrations, getScrimSettings, getLobbyConfig } = require('../../utils/database');
 const { errorEmbed, successEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 const {
@@ -97,48 +97,78 @@ const confirmCmd = {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    const config   = getConfig(interaction.guildId);
-    const settings = getScrimSettings(interaction.guildId);
-    const data     = getRegistrations(interaction.guildId);
+    const config     = getConfig(interaction.guildId);
+    const settings   = getScrimSettings(interaction.guildId);
+    const data       = getRegistrations(interaction.guildId);
+    const lobbyConf  = getLobbyConfig(interaction.guildId);
 
     if (data.slots.length === 0) return interaction.reply({ embeds: [errorEmbed('No Teams', 'No registered teams.')], ephemeral: true });
 
-    const channelId = config.slotlist_channel;
-    if (!channelId) return interaction.reply({ embeds: [errorEmbed('No Channel', 'Set a Slot Allocation channel in `/config`.')], ephemeral: true });
+    // Build list of channels to post in:
+    // Start with the main slotlist channel, then add every configured lobby channel.
+    // Deduplicate so we don't post twice if a lobby channel == slotlist channel.
+    const channelIds = new Set();
+    if (config.slotlist_channel) channelIds.add(config.slotlist_channel);
 
-    try {
-      const ch = await interaction.guild.channels.fetch(channelId);
-
-      const slotListMsg = await ch.send({ embeds: [buildConfirmSlotList(data.slots, settings)] });
-
-      const confirmMsg = await ch.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle('✅ CONFIRM YOUR SLOTS')
-            .setDescription(
-              'React below to confirm or cancel your slot:\n\n' +
-              '✅ — Confirms your slot (__underlined__ in list)\n' +
-              '❌ — Cancels your slot (~~crossed out~~ in list)\n\n' +
-              '*Only your registered manager/captain can react.*'
-            )
-            .setFooter({ text: `${settings.scrim_name} | Slot confirmation` })
-        ]
-      });
-
-      await confirmMsg.react('✅');
-      await confirmMsg.react('❌');
-
-      registerConfirmSession(interaction.guildId, confirmMsg.id, ch.id, slotListMsg.id);
-
-      await interaction.reply({
-        embeds: [successEmbed('Confirm Posted!', `Slot confirmation posted in <#${channelId}>.\nTeams can now react to confirm/cancel.`)],
-        ephemeral: true,
-      });
-    } catch (err) {
-      console.error('❌ /confirm error:', err.message);
-      await interaction.reply({ embeds: [errorEmbed('Error', err.message)], ephemeral: true });
+    const numLobbies  = settings.lobbies || 4;
+    const LOBBY_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+    for (const letter of LOBBY_LETTERS.slice(0, numLobbies)) {
+      const lobbyChId = lobbyConf[`lobby_channel_${letter}`];
+      if (lobbyChId) channelIds.add(lobbyChId);
     }
+
+    if (channelIds.size === 0) return interaction.reply({ embeds: [errorEmbed('No Channels', 'Set a Slot Allocation channel or lobby channels in `/config`.')], ephemeral: true });
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const confirmEmbed = new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setTitle('✅ CONFIRM YOUR SLOTS')
+      .setDescription(
+        'React below to confirm or cancel your slot:\n\n' +
+        '✅ — Confirms your slot (__underlined__ in list)\n' +
+        '❌ — Cancels your slot (~~crossed out~~ in list)\n\n' +
+        '*Only your registered manager/captain can react.*'
+      )
+      .setFooter({ text: `${settings.scrim_name} | Slot confirmation` });
+
+    const posted = [];
+    const errors = [];
+
+    for (const chId of channelIds) {
+      try {
+        const ch = await interaction.guild.channels.fetch(chId);
+        if (!ch) { errors.push(`<#${chId}> not found`); continue; }
+
+        const slotListMsg = await ch.send({ embeds: [buildConfirmSlotList(data.slots, settings)] });
+        const confirmMsg  = await ch.send({ embeds: [confirmEmbed] });
+
+        await confirmMsg.react('✅');
+        await confirmMsg.react('❌');
+
+        // Register session — last one registered wins for reaction tracking,
+        // but all channels get the visual message.
+        registerConfirmSession(interaction.guildId, confirmMsg.id, ch.id, slotListMsg.id);
+
+        posted.push(`<#${chId}>`);
+      } catch (err) {
+        console.error(`❌ /confirm error in channel ${chId}:`, err.message);
+        errors.push(`<#${chId}>: ${err.message}`);
+      }
+    }
+
+    const desc = posted.length
+      ? `Slot confirmation posted in: ${posted.join(', ')}` +
+        (errors.length ? `\n\n⚠️ Failed: ${errors.join(', ')}` : '') +
+        '\n\nTeams can now react to confirm/cancel.'
+      : `Failed to post in all channels:\n${errors.join('\n')}`;
+
+    await interaction.editReply({
+      embeds: [posted.length
+        ? successEmbed('Confirm Posted!', desc)
+        : errorEmbed('Error', desc)
+      ],
+    });
   }
 };
 
