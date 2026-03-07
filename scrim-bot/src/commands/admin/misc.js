@@ -52,19 +52,18 @@ async function postFreshLobbySlotList(guild, letter, lobbyConf, settings) {
       m.embeds?.[0]?.title?.includes(`Lobby ${letter}`)
     );
     for (const [, m] of toDelete) {
-      try { await m.unpin().catch(() => {}); await m.delete(); } catch {}
+      try { await m.delete(); } catch {}
     }
 
     // Also nuke by stored ID in case it wasn't caught above
     const ids = getPersistentSlotListId(guild.id);
     if (ids[msgKey]) {
-      try { const old = await ch.messages.fetch(ids[msgKey]); await old.unpin().catch(() => {}); await old.delete(); } catch {}
+      try { const old = await ch.messages.fetch(ids[msgKey]); await old.delete(); } catch {}
     }
 
-    // Post fresh empty slot list
+    // Post fresh empty slot list (no pin — pin system messages break scan logic)
     const embed = buildPersistentSlotList([], settings, letter);
     const msg   = await ch.send({ embeds: [embed] });
-    try { await msg.pin(); } catch {}
     setPersistentSlotListId(guild.id, { [msgKey]: msg.id });
   } catch (err) {
     console.error('postFreshLobbySlotList error:', err.message);
