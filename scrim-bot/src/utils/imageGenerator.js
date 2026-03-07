@@ -48,8 +48,8 @@ function makeFont(size, bold) {
 //
 // LAYOUT A — "Pro Scrim" (gold rows, header # at x≈40)
 const LAYOUT_A = {
-  L: { rank:40/857, name:55/857, place:292/857, kills:345/857, total:386/857 },
-  R: { rank:460/857, name:490/857, place:712/857, kills:766/857, total:806/857 },
+  L: { rank:40/857, name:80/857, place:292/857, kills:345/857, total:386/857 },
+  R: { rank:460/857, name:515/857, place:712/857, kills:766/857, total:806/857 },
   ROW_MIDS_FY: [141,176,209,248,285,321,356,392,430,464,499,534].map(y => y/625),
   ROW_H_FY: 35/625,
   // Logo sits between team name and placement column
@@ -58,8 +58,8 @@ const LAYOUT_A = {
 
 // LAYOUT B — "Mauritius Scrim" (dark rows, header # at x≈63)
 const LAYOUT_B = {
-  L: { rank:40/857, name:55/857, place:292/857, kills:345/857, total:386/857 },
-  R: { rank:460/857, name:490/857, place:712/857, kills:766/857, total:806/857 },
+  L: { rank:40/857, name:80/857, place:292/857, kills:345/857, total:386/857 },
+  R: { rank:460/857, name:515/857, place:712/857, kills:766/857, total:806/857 },
   ROW_MIDS_FY: [139,175,211,246,282,318,353,389,425,460,496,532].map(y => y/625),
   ROW_H_FY: 35/625,
   LOGO_ZL_FX: 196/857, LOGO_ZR_FX: 616/857, LOGO_H_FY: 24/625,
