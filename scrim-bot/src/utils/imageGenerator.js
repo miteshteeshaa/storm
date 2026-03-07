@@ -36,8 +36,8 @@ const DUAL = {
   ROW_MIDS: [125, 174, 210, 247, 282, 318, 354, 390, 426, 461, 496, 532],
   L: { rank: 28,  name: 68,  place: 320, kills: 390, total: 415 },
   R: { rank: 440, name: 480, place: 735, kills: 800, total: 830 },
-  FONT_SIZE_BOLD:   14,
-  FONT_SIZE_NORMAL: 13,
+  FONT_SIZE_BOLD:   19,
+  FONT_SIZE_NORMAL: 18,
 };
 
 // ── SINGLE PANEL template (1041x493 base) ────────────────────────────────────
