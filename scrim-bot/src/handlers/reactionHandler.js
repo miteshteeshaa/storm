@@ -459,13 +459,12 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
       m.embeds?.[0]?.title?.includes(`Lobby ${team.lobby}`)
     );
     for (const [, m] of existing) {
-      try { await m.unpin().catch(() => {}); await m.delete(); } catch {}
+      try { await m.delete(); } catch {}
     }
 
-    // 3. Post fresh pinned message
+    // 3. Post fresh message (no pin — pin system messages break scan logic)
     const newMsg = await ch.send({ embeds: [embed] });
     setPersistentSlotListId(guild.id, { [msgKey]: newMsg.id });
-    try { await newMsg.pin(); } catch {}
   } catch (err) {
     console.error(`⚠️ Lobby channel post error:`, err.message);
   }
