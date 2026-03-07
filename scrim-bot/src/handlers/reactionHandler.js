@@ -152,9 +152,9 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
         const mgr = `<@${team.manager_id || team.captain_id}>`;
         if (team.confirmed === true)       lines.push(`${emoji} __[${team.team_tag}] ${team.team_name}__ ${mgr}`);
         else if (team.confirmed === false)  lines.push(`${emoji} ~~[${team.team_tag}] ${team.team_name}~~ ${mgr}`);
-        else                               lines.push(`${emoji} [${team.team_tag}] ${team.team_name} ${mgr}`);
+        else                               lines.push(`${emoji} **[${team.team_tag}] ${team.team_name}**\n┗ ${mgr}${team.players?.length ? ' ' + team.players.map(p => `<@${p}>`).join(' ') : ''}`);
       } else {
-        lines.push(`\`${s}\``);
+        lines.push(`\`${s}\` —`);
       }
     }
     fields.push({ name: `🏟️ Lobby ${letter}`, value: lines.join('\n') || '*Empty*', inline: !lobbyFilter });
