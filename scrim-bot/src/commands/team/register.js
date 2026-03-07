@@ -110,10 +110,38 @@ module.exports = {
             const msg = await ch.send({ embeds: [card] });
             registerTeamCard(msg.id, interaction.guildId, teamIndex);
 
-            const numLobbies  = settings.lobbies || 4;
-            const lobbyEmojis = ['🇦','🇧','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'].slice(0, numLobbies);
-            for (const e of lobbyEmojis) {
-              try { await msg.react(e); } catch {}
+            // React with godsent slot emojis — one per slot in the lobby
+            const SLOT_EMOJIS = [
+              { name: 'godsent_01', id: '786762092941541386' },
+              { name: 'godsent_02', id: '786762092941279232' },
+              { name: 'godsent_03', id: '786762092765511711' },
+              { name: 'godsent_04', id: '786762093197393992' },
+              { name: 'godsent_05', id: '786762093289537546' },
+              { name: 'godsent_06', id: '786762093369098250' },
+              { name: 'godsent_07', id: '786762093360709692' },
+              { name: 'godsent_08', id: '786762093264502785' },
+              { name: 'godsent_09', id: '786762093113114625' },
+              { name: 'godsent_10', id: '786762093251919952' },
+              { name: 'godsent_11', id: '786762093214171176' },
+              { name: 'godsent_12', id: '786762093259915328' },
+              { name: 'godsent_13', id: '786762093340262410' },
+              { name: 'godsent_14', id: '786762093276692511' },
+              { name: 'godsent_15', id: '786762093373554688' },
+              { name: 'godsent_16', id: '786762093269090314' },
+              { name: 'godsent_17', id: '786762093289275442' },
+              { name: 'godsent_18', id: '786762093260570644' },
+              { name: 'godsent_19', id: '786762093276692512' },
+              { name: 'godsent_20', id: '786762093113901067' },
+              { name: 'godsent_21', id: '786762093075890207' },
+              { name: 'godsent_22', id: '786762093349044245' },
+              { name: 'godsent_23', id: '786762093239074827' },
+              { name: 'godsent_24', id: '786762093587464212' },
+              { name: 'godsent_25', id: '786762093122158603' },
+            ];
+            const slotsPerLobby = settings.slots_per_lobby || 24;
+            const emojiCount = Math.min(slotsPerLobby, SLOT_EMOJIS.length);
+            for (let i = 0; i < emojiCount; i++) {
+              try { await msg.react(`${SLOT_EMOJIS[i].name}:${SLOT_EMOJIS[i].id}`); } catch {}
               await new Promise(r => setTimeout(r, 300));
             }
           }
