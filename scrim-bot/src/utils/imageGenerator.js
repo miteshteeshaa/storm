@@ -1,51 +1,53 @@
 // ── Results Image Generator ───────────────────────────────────────────────────
-// Resolution-independent: all positions stored as fractions of template size.
+// Fonts are bundled in src/assets/ — no system font or fontconfig dependency.
 
 const { createCanvas, loadImage, registerFont } = require('canvas');
 const path = require('path');
 const fs   = require('fs');
 
-// ── Silence fontconfig errors on Railway (no default config file) ─────────────
-// We register fonts directly by TTF path so fontconfig is not needed at all.
-// Setting FONTCONFIG_FILE to an empty temp config stops the error log spam.
+// ── Silence fontconfig error on Railway ───────────────────────────────────────
 if (!process.env.FONTCONFIG_FILE) {
-  const tmpConf = '/tmp/fontconfig-empty.conf';
+  const tmpConf = '/tmp/fc-empty.conf';
   if (!fs.existsSync(tmpConf)) {
-    fs.writeFileSync(tmpConf, '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig></fontconfig>');
+    fs.writeFileSync(tmpConf,
+      '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig></fontconfig>'
+    );
   }
   process.env.FONTCONFIG_FILE = tmpConf;
 }
 
-// ── Register DejaVu Sans by absolute TTF path ─────────────────────────────────
-// Use the font's real embedded family name ("DejaVu Sans") so canvas resolves it
-// without needing fontconfig at all.
-const DEJAVU_NORMAL = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
-const DEJAVU_BOLD   = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+// ── Font registration ─────────────────────────────────────────────────────────
+// Priority 1: bundled fonts in src/assets/  (always present, committed to repo)
+// Priority 2: system DejaVu Sans            (fallback for local dev)
+const FONT_CANDIDATES = [
+  { reg: path.join(__dirname, '../font.ttf'),      bold: path.join(__dirname, '../font-bold.ttf') },
+  { reg: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', bold: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' },
+  { reg: '/usr/share/fonts/truetype/freefont/FreeSans.ttf',  bold: '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf' },
+];
 
-if (fs.existsSync(DEJAVU_NORMAL)) {
-  try { registerFont(DEJAVU_NORMAL, { family: 'DejaVu Sans', weight: 'normal', style: 'normal' }); }
-  catch(e) { console.error('[imageGen] registerFont normal failed:', e.message); }
-} else { console.error('[imageGen] Font not found:', DEJAVU_NORMAL); }
-
-if (fs.existsSync(DEJAVU_BOLD)) {
-  try { registerFont(DEJAVU_BOLD, { family: 'DejaVu Sans', weight: 'bold', style: 'normal' }); }
-  catch(e) { console.error('[imageGen] registerFont bold failed:', e.message); }
-} else { console.error('[imageGen] Font not found:', DEJAVU_BOLD); }
-
-// Optional custom override: place font.ttf + font-bold.ttf in src/assets/
-const ASSET_DIR  = path.join(__dirname, '../assets');
-const ASSET_REG  = path.join(ASSET_DIR, 'font.ttf');
-const ASSET_BOLD = path.join(ASSET_DIR, 'font-bold.ttf');
-if (fs.existsSync(ASSET_REG))  try { registerFont(ASSET_REG,  { family: 'DejaVu Sans', weight: 'normal' }); } catch {}
-if (fs.existsSync(ASSET_BOLD)) try { registerFont(ASSET_BOLD, { family: 'DejaVu Sans', weight: 'bold'   }); } catch {}
-
-// ── Font strings ──────────────────────────────────────────────────────────────
-// Use the exact family name that's registered above.
-function makeFont(size, bold) {
-  return `${bold ? 'bold ' : ''}${size}px "DejaVu Sans"`;
+let fontsRegistered = false;
+for (const candidate of FONT_CANDIDATES) {
+  if (fs.existsSync(candidate.reg) && fs.existsSync(candidate.bold)) {
+    try {
+      registerFont(candidate.reg,  { family: 'ScrimFont', weight: 'normal', style: 'normal' });
+      registerFont(candidate.bold, { family: 'ScrimFont', weight: 'bold',   style: 'normal' });
+      console.log(`[imageGen] Fonts loaded from: ${candidate.reg}`);
+      fontsRegistered = true;
+      break;
+    } catch(e) {
+      console.warn('[imageGen] registerFont failed:', e.message);
+    }
+  }
+}
+if (!fontsRegistered) {
+  console.error('[imageGen] ⚠️  No fonts found — text will not render. Add font.ttf + font-bold.ttf to src/assets/');
 }
 
-// ── Layout fractions (measured on 857×625 reference, then divided) ────────────
+function makeFont(size, bold) {
+  return `${bold ? 'bold ' : ''}${size}px "ScrimFont"`;
+}
+
+// ── Layout fractions (measured on 857×625 reference image) ───────────────────
 const DUAL_FX = {
   L: { rank:28/857, name:68/857, place:320/857, kills:390/857, total:415/857 },
   R: { rank:440/857, name:480/857, place:735/857, kills:800/857, total:830/857 },
@@ -65,7 +67,7 @@ const SINGLE_FX = {
   LOGO_H_FY:     50/493,
 };
 
-const FONT_FILL = 0.52; // font size = this fraction of row pixel height
+const FONT_FILL = 0.52;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -102,22 +104,22 @@ async function generateResultsImage(templatePath, teams, fontColor = '#FFFFFF', 
 }
 
 async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath) {
-  const rowH    = Math.round(DUAL_FX.ROW_H_FY * TH);
-  const rowMids = DUAL_FX.ROW_MIDS_FY.map(fy => Math.round(fy * TH));
-  const L       = scaleX(DUAL_FX.L, TW);
-  const R       = scaleX(DUAL_FX.R, TW);
+  const rowH     = Math.round(DUAL_FX.ROW_H_FY * TH);
+  const rowMids  = DUAL_FX.ROW_MIDS_FY.map(fy => Math.round(fy * TH));
+  const L        = scaleX(DUAL_FX.L, TW);
+  const R        = scaleX(DUAL_FX.R, TW);
   const fontSize = Math.max(10, Math.round(rowH * FONT_FILL));
-  const BOLD    = makeFont(fontSize + 1, true);
-  const NORMAL  = makeFont(fontSize,     false);
-  console.log(`[imageGen] dual rowH=${rowH}px font=${fontSize}px`);
+  const BOLD     = makeFont(fontSize + 1, true);
+  const NORMAL   = makeFont(fontSize,     false);
+  console.log(`[imageGen] dual rowH=${rowH}px fontSize=${fontSize}px`);
 
   const leftTeams  = teams.slice(0, rowMids.length);
   const rightTeams = teams.slice(rowMids.length);
 
   let logo = null;
-  if (logoPath && require("fs").existsSync(logoPath)) try { logo = await loadImage(logoPath); } catch {}
-  const logoH = Math.round(DUAL_FX.LOGO_H_FY * TH);
-  const logoW = logo ? Math.round(logo.width * logoH / logo.height) : 0;
+  if (logoPath && fs.existsSync(logoPath)) try { logo = await loadImage(logoPath); } catch {}
+  const logoH  = Math.round(DUAL_FX.LOGO_H_FY * TH);
+  const logoW  = logo ? Math.round(logo.width * logoH / logo.height) : 0;
   const logoZL = Math.round(DUAL_FX.LOGO_ZL_FX * TW);
   const logoZR = Math.round(DUAL_FX.LOGO_ZR_FX * TW);
 
@@ -145,15 +147,15 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath) 
 }
 
 async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath) {
-  const rowH    = Math.round(SINGLE_FX.ROW_H_FY * TH);
-  const rowMids = SINGLE_FX.ROW_MIDS_FY.map(fy => Math.round(fy * TH));
-  const C       = scaleX(SINGLE_FX.C, TW);
+  const rowH     = Math.round(SINGLE_FX.ROW_H_FY * TH);
+  const rowMids  = SINGLE_FX.ROW_MIDS_FY.map(fy => Math.round(fy * TH));
+  const C        = scaleX(SINGLE_FX.C, TW);
   const fontSize = Math.max(12, Math.round(rowH * FONT_FILL));
-  const BOLD    = makeFont(fontSize + 1, true);
-  const NORMAL  = makeFont(fontSize,     false);
+  const BOLD     = makeFont(fontSize + 1, true);
+  const NORMAL   = makeFont(fontSize,     false);
 
   let logo = null;
-  if (logoPath && require("fs").existsSync(logoPath)) try { logo = await loadImage(logoPath); } catch {}
+  if (logoPath && fs.existsSync(logoPath)) try { logo = await loadImage(logoPath); } catch {}
   const logoH      = Math.round(SINGLE_FX.LOGO_H_FY * TH);
   const logoW      = logo ? Math.round(logo.width * logoH / logo.height) : 0;
   const logoStartX = Math.round(SINGLE_FX.LOGO_START_FX * TW);
