@@ -20,13 +20,25 @@ async function purgeChannel(guild, channelId) {
     if (!ch) return 0;
     let deleted = 0;
     const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+
     while (true) {
-      const msgs   = await ch.messages.fetch({ limit: 100 });
+      const msgs = await ch.messages.fetch({ limit: 100 });
       if (msgs.size === 0) break;
+
       const recent = msgs.filter(m => m.createdTimestamp > cutoff);
-      if (recent.size === 0) break;
-      if (recent.size === 1) { await recent.first().delete().catch(() => {}); deleted++; }
-      else { await ch.bulkDelete(recent).catch(() => {}); deleted += recent.size; }
+      const old    = msgs.filter(m => m.createdTimestamp <= cutoff);
+
+      // Bulk delete recent messages (Discord API limit: < 14 days)
+      if (recent.size > 1)  { await ch.bulkDelete(recent).catch(() => {}); deleted += recent.size; }
+      else if (recent.size === 1) { await recent.first().delete().catch(() => {}); deleted++; }
+
+      // Individually delete old messages (bulkDelete won't work on these)
+      for (const [, msg] of old) {
+        await msg.delete().catch(() => {});
+        deleted++;
+        await new Promise(r => setTimeout(r, 300)); // avoid rate limit
+      }
+
       if (msgs.size < 100) break;
     }
     return deleted;
