@@ -62,7 +62,7 @@ function buildStepMenu(settings) {
 
   const lobbyMenu = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId('config_step')
+      .setCustomId('config_step_lobby')
       .setPlaceholder('Lobby Channels & Roles')
       .addOptions(lobbyOptions)
   );
