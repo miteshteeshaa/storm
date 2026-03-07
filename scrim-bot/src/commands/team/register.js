@@ -110,6 +110,14 @@ module.exports = {
             const msg = await ch.send({ embeds: [card] });
             registerTeamCard(msg.id, interaction.guildId, teamIndex);
 
+            // React with lobby letter emojis first (🇦🇧🇨... up to numLobbies)
+            const numLobbies = settings.lobbies || 4;
+            const LOBBY_EMOJI_LIST = ['🇦','🇧','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'];
+            for (let i = 0; i < numLobbies; i++) {
+              try { await msg.react(LOBBY_EMOJI_LIST[i]); } catch {}
+              await new Promise(r => setTimeout(r, 250));
+            }
+
             // React with godsent slot emojis — one per slot in the lobby
             const SLOT_EMOJIS = [
               { name: 'godsent_01', id: '786762092941541386' },
