@@ -53,10 +53,6 @@ module.exports = {
         return interaction.reply({ embeds: [errorEmbed('Tag Taken', `**[${teamTag}]** is already registered.`)], ephemeral: true });
       if (allTeams.find(t => t.team_name.toLowerCase() === teamName.toLowerCase()))
         return interaction.reply({ embeds: [errorEmbed('Name Taken', `**${teamName}** is already registered.`)], ephemeral: true });
-      if (allTeams.find(t => t.captain_id === captainId || t.manager_id === captainId))
-        return interaction.reply({ embeds: [errorEmbed('Already Registered', `<@${captainId}> is already in a team.`)], ephemeral: true });
-      if (allTeams.find(t => t.manager_id === manager.id || t.captain_id === manager.id))
-        return interaction.reply({ embeds: [errorEmbed('Already Registered', `<@${manager.id}> is already in a team.`)], ephemeral: true });
 
       const isWaitlist = data.slots.length >= settings.slots;
       const queueNum   = isWaitlist ? data.waitlist.length + 1 : data.slots.length + 1;
