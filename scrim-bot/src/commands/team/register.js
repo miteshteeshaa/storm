@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 const {
   getConfig, getRegistrations, setRegistrations, getScrimSettings
 } = require('../../utils/database');
@@ -98,14 +98,9 @@ module.exports = {
             const playerMentions = players.map(p => `<@${p.id}>`).join(' ');
             const teamIndex      = data.slots.length - 1;
 
-            const card = new EmbedBuilder()
-              .setColor(0x5865F2)
-              .setTitle(`[${teamTag}] ${teamName}`)
-              .setDescription(playerMentions)
-              .setFooter({ text: `#${queueNum}` })
-              .setTimestamp();
-
-            const msg = await ch.send({ embeds: [card] });
+            // Plain text card — faster rendering, no embed needed
+            const cardText = `[${teamTag}] ${teamName} ${playerMentions}`;
+            const msg = await ch.send({ content: cardText });
             registerTeamCard(msg.id, interaction.guildId, teamIndex);
 
             // Add reactions in background — LOBBY ONLY, no slot emojis (bot auto-assigns slot)
