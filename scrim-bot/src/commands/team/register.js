@@ -108,7 +108,7 @@ module.exports = {
             const msg = await ch.send({ embeds: [card] });
             registerTeamCard(msg.id, interaction.guildId, teamIndex);
 
-            // Add reactions in background
+            // Add reactions in background — LOBBY ONLY, no slot emojis (bot auto-assigns slot)
             (async () => {
               const numLobbies = settings.lobbies || 4;
               const ALPHA_NAMES = ['ALPHABET_A','ALPHABET_B','ALPHABET_C','ALPHABET_D','ALPHABET_E','ALPHABET_F','ALPHABET_G','ALPHABET_H','ALPHABET_I','ALPHABET_J'];
@@ -116,16 +116,6 @@ module.exports = {
                 const name = ALPHA_NAMES[i];
                 const id   = LOBBY_EMOJI_IDS[name];
                 try { await msg.react(`${name}:${id}`); } catch {}
-                await new Promise(r => setTimeout(r, 150));
-              }
-              const slotsPerLobby = settings.slots_per_lobby || 24;
-              const emojiCount = Math.min(slotsPerLobby, SLOT_EMOJI_LIST.length);
-              for (let i = 0; i < emojiCount; i++) {
-                const e = SLOT_EMOJI_LIST[i];
-                if (e.id === 'REPLACE_ME') continue; // skip unfilled
-                try { await msg.react(`${e.name}:${e.id}`); } catch (err) {
-                  console.error(`[REACT] Failed slot ${i+1} emoji ${e.name}:${e.id} — ${err.message}`);
-                }
                 await new Promise(r => setTimeout(r, 150));
               }
             })();
