@@ -280,15 +280,15 @@ module.exports = {
         const raw = m.fields.getTextInputValue('val').trim();
         if (['lobbies','slots_per_lobby','first_slot'].includes(value)) {
           const num = parseInt(raw);
-          if (value === 'lobbies' && (!isNaN(num)) && num > 10) {
-            await m.reply({ content: '❌ Maximum number of lobbies is **10** (A–J). Please try again.', ephemeral: true });
+          if (isNaN(num) || num < 1) {
+            await m.update({ content: '❌ Please enter a valid number (1 or higher).', embeds: [], components: [] });
             continue;
           }
-          if (!isNaN(num) && num >= 1) setScrimSettings(interaction.guildId, { [value]: num });
-          else {
-            await m.reply({ content: '❌ Please enter a valid number (1 or higher).', ephemeral: true });
+          if (value === 'lobbies' && num > 10) {
+            await m.update({ content: '❌ Maximum number of lobbies is **10** (A–J).', embeds: [], components: [] });
             continue;
           }
+          setScrimSettings(interaction.guildId, { [value]: num });
         } else {
           setScrimSettings(interaction.guildId, { [value]: raw });
         }
