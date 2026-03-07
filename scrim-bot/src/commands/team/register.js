@@ -90,18 +90,13 @@ module.exports = {
         try {
           const regCh = await interaction.guild.channels.fetch(config.register_channel);
           if (regCh) {
-            await regCh.send({
-              embeds: [
-                new EmbedBuilder()
-                  .setColor(isWaitlist ? 0xFFAA00 : 0x00FF7F)
-                  .setDescription(
-                    isWaitlist
-                      ? `⏳ **[${teamTag}] ${teamName}** added to waitlist #${queueNum}`
-                      : `✅ **[${teamTag}] ${teamName}** registered — waiting for slot assignment`
-                  )
-                  .setTimestamp()
-              ]
-            });
+            if (isWaitlist) {
+              // Waitlist: small text-only message
+              await regCh.send({ content: `⏳ **[${teamTag}] ${teamName}** added to waitlist #${queueNum}` });
+            } else {
+              // Slot confirmed: just a big ✅ — clean, minimal look
+              await regCh.send({ content: '✅' });
+            }
           }
         } catch {}
       }
