@@ -191,15 +191,19 @@ async function handleReactionAdd(reaction, user) {
   if (!guild) return;
   const emoji = reaction.emoji.name;
 
+  console.log(`[REACTION] emoji=${emoji} user=${user.id} msg=${message.id} guild=${guild.id}`);
+
   // ── ADMIN assigning slot on team card ─────────────────────────────────────
   const cardInfo = lookupTeamCard(message.id, guild.id);
+  console.log(`[REACTION] cardInfo=`, cardInfo);
   if (cardInfo) {
     const config = getConfig(guild.id);
     const member = await guild.members.fetch(user.id).catch(() => null);
-    if (!member) return;
+    if (!member) { console.log('[REACTION] member not found'); return; }
     const isAdmin = member.permissions.has('Administrator') ||
                     guild.ownerId === user.id ||
                     (config.admin_role && member.roles.cache.has(config.admin_role));
+    console.log(`[REACTION] isAdmin=${isAdmin}`);
     if (!isAdmin) {
       try { await reaction.users.remove(user.id); } catch {}
       return;
@@ -209,6 +213,7 @@ async function handleReactionAdd(reaction, user) {
     const settings  = getScrimSettings(guild.id);
     const lobbyConf = getLobbyConfig(guild.id);
     const team      = data.slots[cardInfo.teamIndex];
+    console.log(`[REACTION] teamIndex=${cardInfo.teamIndex} team=`, team?.team_name);
     if (!team) return;
 
     const prevLobby = team.lobby;
