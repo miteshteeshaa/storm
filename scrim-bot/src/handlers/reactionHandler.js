@@ -254,6 +254,9 @@ async function handleReactionAdd(reaction, user) {
       team.lobby = newLobby;
       // Auto-assign next available slot when lobby is first set
       if (!team.lobby_slot || prevLobby !== newLobby) {
+        // Save current team state first so nextAvailableSlot sees up-to-date data
+        data.slots[cardInfo.teamIndex] = team;
+        setRegistrations(guild.id, data);
         const autoSlot = nextAvailableSlot(data.slots, newLobby, settings);
         if (autoSlot) team.lobby_slot = autoSlot;
         else delete team.lobby_slot;
@@ -559,9 +562,14 @@ async function updateTeamCardEmbed(message, team) {
       ? `🏟️ Lobby **${team.lobby}**${team.lobby_slot ? `  •  🎯 Slot **${team.lobby_slot}**` : '  •  ⏳ slot pending'}`
       : '⏳ Unassigned';
 
+    // Strip any previously appended lobby/slot line to avoid duplicates
+    const baseDescription = (old.description || '')
+      .replace(/\n\n(🏟️|⏳ Unassigned).*$/s, '')
+      .trimEnd();
+
     const updated = EmbedBuilder.from(old)
       .setColor(team.lobby && team.lobby_slot ? 0x00FF7F : team.lobby ? 0xFFAA00 : 0x5865F2)
-      .setDescription(`${old.description || ''}\n\n${lobbyText}`)
+      .setDescription(`${baseDescription}\n\n${lobbyText}`)
       .setFooter({ text: old.footer?.text?.split(' |')[0] || '' });
     await message.edit({ embeds: [updated] });
   } catch {}
