@@ -1,17 +1,34 @@
 // ── Google Sheets utility ─────────────────────────────────────────────────────
-// OAuth2 auth via GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN
+// Auth: Service Account via GOOGLE_CREDENTIALS_JSON env var
+// Set GOOGLE_CREDENTIALS_JSON = the full JSON content of your service account key file
 
 const { google } = require('googleapis');
 
 function getAuth() {
+  // Support both Service Account (preferred) and OAuth2 (fallback)
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    // Service Account JSON — paste the entire key file content as env var
+    let creds;
+    try { creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); }
+    catch { throw new Error('GOOGLE_CREDENTIALS_JSON is not valid JSON.'); }
+    const auth = new google.auth.GoogleAuth({
+      credentials: creds,
+      scopes: [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive',
+      ],
+    });
+    console.log('✅ Using Service Account auth');
+    return auth;
+  }
+
+  // Fallback: OAuth2 refresh token
   const clientId     = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-
   if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Missing GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, or GOOGLE_REFRESH_TOKEN env vars.');
+    throw new Error('Set GOOGLE_CREDENTIALS_JSON (service account) or GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN.');
   }
-
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost');
   oauth2Client.setCredentials({ refresh_token: refreshToken });
   console.log('✅ Using OAuth2 with refresh token');
@@ -521,11 +538,14 @@ async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter 
       const teamName = row[1] || '';
       if (!teamName || teamName === '-') continue;
 
-      let tPlace = 0, tKill = 0;
+      let tPlace = 0, tKill = 0, tWins = 0;
       for (let m = 0; (3 + m * 2 + 1) < row.length; m++) {
         const place = parseInt(row[3 + m * 2]);
         const kills = parseInt(row[3 + m * 2 + 1]) || 0;
-        if (!isNaN(place) && place >= 1 && place <= placementPts.length) tPlace += placementPts[place - 1];
+        if (!isNaN(place) && place >= 1 && place <= placementPts.length) {
+          tPlace += placementPts[place - 1];
+          if (place === 1) tWins++;
+        }
         tKill += kills;
       }
 
@@ -537,6 +557,7 @@ async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter 
         placement_pts: tPlace,
         kill_pts:      tKill,
         total:         tPlace + tKill,
+        wins:          tWins,
       });
     }
   }
