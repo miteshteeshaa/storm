@@ -1,103 +1,75 @@
 // ── Results Image Generator ───────────────────────────────────────────────────
-// Uses percentage-based positioning so ANY template image works automatically.
-//
-// TEMPLATE DESIGN SPEC (share this with admins):
-// ─────────────────────────────────────────────────────────────────────────────
-// • Canvas is split into LEFT (0–50%) and RIGHT (50–100%) halves
-// • Each half has 12 data rows, evenly spaced from 15.5% to 87.5% of height
-// • Column positions (% of width) per half:
-//     # (rank)   :  3.0%
-//     Team Name  :  7.5%  (left-aligned)
-//     Placement  : 38.5%
-//     Kills      : 45.5%
-//     Total      : 51.0%
-// • Right half uses the same columns + 50% offset
-// • Leave header above 15% and footer below 88% for branding / logos
-// ─────────────────────────────────────────────────────────────────────────────
+const { createCanvas, loadImage } = require('canvas');
 
-const { createCanvas, loadImage, registerFont } = require('canvas');
-const path = require('path');
+// Row midpoints — auto-detected from template pixel analysis
+// These work for both 902x621 and 1920x1080 templates (scaled dynamically)
+const BASE_ROW_MIDS = [146, 184, 222, 259, 297, 334, 371, 409, 446, 483, 520];
+const BASE_W = 902;
+const BASE_H = 621;
 
-// ── Layout constants (all as % of image dimensions) ──────────────────────────
-const ROWS       = 12;
-const ROW_START  = 0.155;   // first row Y (% of height)
-const ROW_END    = 0.875;   // last row Y  (% of height)
-const R_OFFSET   = 0.500;   // right-half X offset (% of width)
+// Column positions (for 902x621 base)
+const BASE_L = { rank:15,  name:52,  place:218, kills:264, total:308 };
+const BASE_R = { rank:388, name:426, place:700, kills:780, total:840 };
 
-// Column X positions — LEFT half (% of width)
-const COL = {
-  slot:      0.030,
-  name:      0.075,
-  placement: 0.385,
-  kills:     0.455,
-  total:     0.510,
-};
-
-/**
- * Generate a results leaderboard image.
- *
- * @param {string} templatePath  - absolute path to the background PNG/JPG
- * @param {Array}  teams         - sorted array of team objects:
- *   { rank, team_name, team_tag, placement_pts, kill_pts, total }
- * @returns {Buffer} PNG image buffer
- */
 async function generateResultsImage(templatePath, teams) {
   const template = await loadImage(templatePath);
-  const W = template.width;
-  const H = template.height;
+  const TW = template.width;
+  const TH = template.height;
 
-  const canvas = createCanvas(W, H);
+  const canvas = createCanvas(TW, TH);
   const ctx    = canvas.getContext('2d');
-
-  // Draw background template
   ctx.drawImage(template, 0, 0);
 
-  // ── Compute pixel positions from percentages ─────────────────────────────
-  const rowYs = [];
-  for (let i = 0; i < ROWS; i++) {
-    rowYs.push(Math.round((ROW_START + i * (ROW_END - ROW_START) / (ROWS - 1)) * H));
+  // Scale factors relative to base template size
+  const sx = TW / BASE_W;
+  const sy = TH / BASE_H;
+
+  const rowMids = BASE_ROW_MIDS.map(y => Math.round(y * sy));
+  const L = Object.fromEntries(Object.entries(BASE_L).map(([k,v]) => [k, Math.round(v * sx)]));
+  const R = Object.fromEntries(Object.entries(BASE_R).map(([k,v]) => [k, Math.round(v * sx)]));
+
+  const fontSize     = Math.round(13 * sx);
+  const fontSizeSm   = Math.round(11 * sx);
+  const FONT_BOLD    = `bold ${fontSize}px Sans`;
+  const FONT_NORMAL  = `${fontSizeSm}px Sans`;
+  const GOLD         = '#FFD700';
+  const WHITE        = '#FFFFFF';
+
+  function drawText(text, x, y, font, color) {
+    ctx.font      = font;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillText(String(text), x + 1, y + 1);
+    ctx.fillStyle = color;
+    ctx.fillText(String(text), x, y);
   }
 
-  // Font sizes scale with image height
-  const fzRank  = Math.max(10, Math.round(H * 0.026));  // bold rank/total
-  const fzName  = Math.max(9,  Math.round(H * 0.021));  // team name
-  const fzNum   = Math.max(9,  Math.round(H * 0.023));  // placement/kills
+  const slotsPerSide = Math.ceil(teams.length / 2);
+  const leftTeams    = teams.slice(0, slotsPerSide);
+  const rightTeams   = teams.slice(slotsPerSide);
 
-  // ── Text drawing helper ──────────────────────────────────────────────────
-  function drawText(text, xPct, y, fontSize, color, bold = false, align = 'center') {
-    const x = Math.round(xPct * W);
-    ctx.font        = `${bold ? 'bold ' : ''}${fontSize}px Sans`;
-    ctx.textAlign   = align;
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = 'rgba(0,0,0,0.95)';
-    ctx.shadowBlur  = 5;
-    ctx.fillStyle   = color;
-    ctx.fillText(String(text ?? ''), x, y);
-    ctx.shadowBlur  = 0;
+  for (let i = 0; i < rowMids.length; i++) {
+    const y = rowMids[i] - Math.round(7 * sy);
+
+    if (i < leftTeams.length) {
+      const t = leftTeams[i];
+      ctx.textAlign = 'left';
+      drawText(t.rank,          L.rank,  y, FONT_BOLD,   GOLD);
+      drawText(t.team_name,     L.name,  y, FONT_NORMAL, WHITE);
+      drawText(t.placement_pts, L.place, y, FONT_NORMAL, WHITE);
+      drawText(t.kill_pts,      L.kills, y, FONT_NORMAL, WHITE);
+      drawText(t.total,         L.total, y, FONT_BOLD,   GOLD);
+    }
+
+    if (i < rightTeams.length) {
+      const t = rightTeams[i];
+      ctx.textAlign = 'left';
+      drawText(t.rank,          R.rank,  y, FONT_BOLD,   GOLD);
+      drawText(t.team_name,     R.name,  y, FONT_NORMAL, WHITE);
+      drawText(t.placement_pts, R.place, y, FONT_NORMAL, WHITE);
+      drawText(t.kill_pts,      R.kills, y, FONT_NORMAL, WHITE);
+      drawText(t.total,         R.total, y, FONT_BOLD,   GOLD);
+    }
   }
-
-  // ── Draw one team row ────────────────────────────────────────────────────
-  function drawTeam(team, rowIndex, side) {
-    const y      = rowYs[rowIndex];
-    if (y === undefined) return;
-    const offset = side === 'R' ? R_OFFSET : 0;
-
-    const GOLD  = '#FFD700';
-    const WHITE = '#FFFFFF';
-
-    drawText(team.rank,                   COL.slot      + offset, y, fzRank, GOLD,  true,  'center');
-    drawText(team.team_name || '-',       COL.name      + offset, y, fzName, WHITE, false, 'left');
-    drawText(team.placement_pts ?? 0,     COL.placement + offset, y, fzNum,  WHITE, false, 'center');
-    drawText(team.kill_pts ?? 0,          COL.kills     + offset, y, fzNum,  WHITE, false, 'center');
-    drawText(team.total ?? 0,             COL.total     + offset, y, fzRank, GOLD,  true,  'center');
-  }
-
-  // ── Split teams into left (rows 1-12) and right (rows 13-24) ────────────
-  const leftTeams  = teams.slice(0, ROWS);
-  const rightTeams = teams.slice(ROWS, ROWS * 2);
-
-  for (let i = 0; i < leftTeams.length;  i++) drawTeam(leftTeams[i],  i, 'L');
-  for (let i = 0; i < rightTeams.length; i++) drawTeam(rightTeams[i], i, 'R');
 
   return canvas.toBuffer('image/png');
 }
