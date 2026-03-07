@@ -3,6 +3,7 @@ const { setServer, getConfig, getRegistrations, getScrimSettings, getLobbyConfig
 const { errorEmbed, successEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 const { registerConfirmSession } = require('../../handlers/reactionHandler');
+const { applyRegistrationChannelPerms } = require('./config');
 
 // ── /open ─────────────────────────────────────────────────────────────────────
 const openCmd = {
@@ -21,6 +22,11 @@ const openCmd = {
     const maxSlots = interaction.options.getInteger('slots') || settings.slots;
 
     setServer(interaction.guildId, { registration_open: true, max_slots: maxSlots, opened_at: new Date().toISOString() });
+
+    // ── Open registration channel permissions ────────────────────────────
+    if (config.register_channel && config.registration_role) {
+      await applyRegistrationChannelPerms(interaction.guild, config.register_channel, config.registration_role, true);
+    }
 
     const embed = new EmbedBuilder()
       .setColor(0x00FF7F)
@@ -57,6 +63,11 @@ const closeCmd = {
     setServer(interaction.guildId, { registration_open: false });
     const config = getConfig(interaction.guildId);
     const data   = getRegistrations(interaction.guildId);
+
+    // ── Close registration channel permissions ───────────────────────────
+    if (config.register_channel && config.registration_role) {
+      await applyRegistrationChannelPerms(interaction.guild, config.register_channel, config.registration_role, false);
+    }
 
     if (config.register_channel) {
       try {
