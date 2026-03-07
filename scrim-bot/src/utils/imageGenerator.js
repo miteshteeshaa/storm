@@ -49,9 +49,9 @@ function makeFont(size, bold) {
 
 // ── Layout fractions (measured on 857×625 reference image) ───────────────────
 const DUAL_FX = {
-  L: { rank:28/857, name:68/857, place:320/857, kills:390/857, total:415/857 },
-  R: { rank:440/857, name:480/857, place:735/857, kills:800/857, total:830/857 },
-  ROW_MIDS_FY: [125,174,210,247,282,318,354,390,426,461,496,532].map(y => y/625),
+  L: { rank:14/857, name:84/857, place:318/857, kills:358/857, total:400/857 },
+  R: { rank:447/857, name:504/857, place:738/857, kills:778/857, total:820/857 },
+  ROW_MIDS_FY: [124,174,211,247,282,318,354,390,426,461,496,532].map(y => y/625),
   ROW_H_FY:    35/625,
   LOGO_ZL_FX:  270/857,
   LOGO_ZR_FX:  688/857,
