@@ -143,21 +143,29 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
   const fields = [];
   for (const letter of toShow) {
     const teams = (lobbyGroups[letter] || []).sort((a, b) => a.lobby_slot - b.lobby_slot);
-    const lines = [];
 
+    const allLines = [];
     for (let s = first_slot; s < first_slot + slotsPerLobby; s++) {
       const team  = teams.find(t => t.lobby_slot === s);
+      const emoji = numEmoji(s);
       if (team) {
-        const emoji = numEmoji(s);
-        const mgr = `<@${team.manager_id || team.captain_id}>`;
-        if (team.confirmed === true)       lines.push(`${emoji} __[${team.team_tag}] ${team.team_name}__ ${mgr}`);
-        else if (team.confirmed === false)  lines.push(`${emoji} ~~[${team.team_tag}] ${team.team_name}~~ ${mgr}`);
-        else                               lines.push(`${emoji} **[${team.team_tag}] ${team.team_name}**\n┗ ${mgr}${team.players?.length ? ' ' + team.players.map(p => `<@${p}>`).join(' ') : ''}`);
+        const mgr  = `<@${team.manager_id || team.captain_id}>`;
+        const line = `${emoji} **[${team.team_tag}] ${team.team_name}** ${mgr}`;
+        if (team.confirmed === true)       allLines.push(`__${line}__`);
+        else if (team.confirmed === false)  allLines.push(`~~${line}~~`);
+        else                               allLines.push(line);
       } else {
-        lines.push(`\`${s}\` —`);
+        allLines.push(`${emoji} —`);
       }
     }
-    fields.push({ name: `🏟️ Lobby ${letter}`, value: lines.join('\n') || '*Empty*', inline: !lobbyFilter });
+
+    // Split into two columns of 12 to stay under Discord's 1024 char field limit
+    const half = Math.ceil(allLines.length / 2);
+    const col1 = allLines.slice(0, half).join('\n') || '—';
+    const col2 = allLines.slice(half).join('\n') || '—';
+    fields.push({ name: `🏟️ Lobby ${letter}`, value: col1, inline: true });
+    fields.push({ name: '\u200b', value: col2, inline: true });
+    fields.push({ name: '\u200b', value: '\u200b', inline: true }); // spacer
   }
 
   const unassigned = slots.filter(t => !t.lobby);
