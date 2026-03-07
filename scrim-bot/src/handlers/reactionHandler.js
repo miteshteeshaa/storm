@@ -5,12 +5,10 @@ const {
   getScrimSettings, getLobbyConfig,
   getConfirmSessions: dbGetConfirmSessions, setConfirmSessions: dbSetConfirmSessions,
   getSlotListIds, setSlotListIds,
+  getTeamCards, setTeamCard,
 } = require('../utils/database');
 
-// ── In-memory team card map (ephemeral, only needed during runtime) ────────────
-const teamCardMap = new Map();
-
-// ── Confirm sessions — persisted to disk so restarts don't break reactions ────
+// ── Confirm sessions — persisted to disk ──────────────────────────────────────
 function registerConfirmSession(guildId, confirmMessageId, channelId, lobbyLetter) {
   const existing = dbGetConfirmSessions(guildId);
   const idx = existing.findIndex(s => s.channelId === channelId);
@@ -22,11 +20,19 @@ function registerConfirmSession(guildId, confirmMessageId, channelId, lobbyLette
 function getConfirmSessions(guildId) { return dbGetConfirmSessions(guildId); }
 function getConfirmSession(guildId)  { return getConfirmSessions(guildId)[0] || null; }
 
-// ── Slot list message IDs — persisted to disk so restarts don't lose them ─────
+// ── Slot list message IDs — persisted to disk ─────────────────────────────────
 function getPersistentSlotListId(guildId)       { return getSlotListIds(guildId); }
 function setPersistentSlotListId(guildId, data) { setSlotListIds(guildId, data); }
 
-function registerTeamCard(messageId, guildId, teamIndex) { teamCardMap.set(messageId, { guildId, teamIndex }); }
+// ── Team card map — persisted to disk so restarts don't lose card→team mapping ─
+function registerTeamCard(messageId, guildId, teamIndex) {
+  setTeamCard(guildId, messageId, teamIndex);
+}
+function lookupTeamCard(messageId, guildId) {
+  const cards = getTeamCards(guildId);
+  if (cards[messageId] !== undefined) return { guildId, teamIndex: cards[messageId] };
+  return null;
+}
 
 // ── Emoji maps ────────────────────────────────────────────────────────────────
 // Regional indicator letters A–J → lobby letter
@@ -186,7 +192,7 @@ async function handleReactionAdd(reaction, user) {
   const emoji = reaction.emoji.name;
 
   // ── ADMIN assigning slot on team card ─────────────────────────────────────
-  const cardInfo = teamCardMap.get(message.id);
+  const cardInfo = lookupTeamCard(message.id, guild.id);
   if (cardInfo) {
     const config = getConfig(guild.id);
     const member = await guild.members.fetch(user.id).catch(() => null);
@@ -379,7 +385,7 @@ async function handleReactionRemove(reaction, user) {
   if (!guild) return;
   const emoji = reaction.emoji.name;
 
-  const cardInfo = teamCardMap.get(message.id);
+  const cardInfo = lookupTeamCard(message.id, guild.id);
   if (cardInfo) {
     const config  = getConfig(guild.id);
     const member  = await guild.members.fetch(user.id).catch(() => null);
