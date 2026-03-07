@@ -137,15 +137,15 @@ const confirmCmd = {
         const ch = await interaction.guild.channels.fetch(chId);
         if (!ch) { errors.push(`<#${chId}> not found`); continue; }
 
-        const slotListMsg = await ch.send({ embeds: [buildConfirmSlotList(data.slots, settings)] });
-        const confirmMsg  = await ch.send({ embeds: [confirmEmbed] });
+        // Only post the instruction embed — NO slot list embed here.
+        // The persistent slot list already in each lobby channel will update in place.
+        const confirmMsg = await ch.send({ embeds: [confirmEmbed] });
 
         await confirmMsg.react('✅');
         await confirmMsg.react('❌');
 
-        // Register session — last one registered wins for reaction tracking,
-        // but all channels get the visual message.
-        registerConfirmSession(interaction.guildId, confirmMsg.id, ch.id, slotListMsg.id);
+        // Register session per channel so reactions in each lobby are tracked correctly
+        registerConfirmSession(interaction.guildId, confirmMsg.id, ch.id, null);
 
         posted.push(`<#${chId}>`);
       } catch (err) {
