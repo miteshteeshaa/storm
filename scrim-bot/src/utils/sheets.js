@@ -1,77 +1,21 @@
 // ── Google Sheets utility ─────────────────────────────────────────────────────
-// Supports two auth modes:
-//   1. OAuth2 refresh token (GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET + GOOGLE_OAUTH_REFRESH_TOKEN)
-//      → Used for Drive file CREATION — files owned by your personal Google account, no quota issues
-//   2. Service Account JWT (GOOGLE_CREDENTIALS_JSON)
-//      → Used as fallback for reading/writing sheet data
+// OAuth2 auth via GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN
 
 const { google } = require('googleapis');
 
-// ── OAuth2 client for personal account Drive operations ───────────────────────
-function getOAuthClient() {
-  const clientId     = process.env.GOOGLE_OAUTH_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
-
-  if (!clientId || !clientSecret || !refreshToken) return null;
-
-  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, 'urn:ietf:wg:oauth:2.0:oob');
-  oauth2.setCredentials({ refresh_token: refreshToken });
-  console.log('✅ Using OAuth2 — personal Google account for Drive creation');
-  return oauth2;
-}
-
-// ── Service account JWT for sheet read/write ──────────────────────────────────
 function getAuth() {
-  const scopes = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/drive.file',
-  ];
+  const clientId     = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
 
-  // Support GOOGLE_CREDENTIALS_JSON (paste entire service account JSON as one env var)
-  if (process.env.GOOGLE_CREDENTIALS_JSON) {
-    try {
-      let raw = process.env.GOOGLE_CREDENTIALS_JSON.trim();
-
-      if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
-        raw = raw.slice(1, -1);
-      }
-
-      const creds = JSON.parse(raw);
-
-      if (creds.private_key) {
-        creds.private_key = creds.private_key.replace(/\\n/g, '\n');
-      }
-
-      console.log('✅ Using GOOGLE_CREDENTIALS_JSON — email:', creds.client_email);
-
-      return new google.auth.JWT(
-        creds.client_email,
-        null,
-        creds.private_key,
-        scopes,
-      );
-    } catch (e) {
-      console.error('❌ Failed to parse GOOGLE_CREDENTIALS_JSON:', e.message);
-    }
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error('Missing GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, or GOOGLE_REFRESH_TOKEN env vars.');
   }
 
-  // Fallback: GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_EMAIL || '';
-  let key     = process.env.GOOGLE_PRIVATE_KEY || '';
-
-  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-    key = key.slice(1, -1);
-  }
-  key = key.replace(/\\n/g, '\n');
-
-  if (key && !key.includes('\n')) {
-    console.warn('⚠️  GOOGLE_PRIVATE_KEY has no newlines — it may be malformed.');
-  }
-
-  console.log('✅ Using GOOGLE_SERVICE_ACCOUNT_EMAIL — email:', email);
-  return new google.auth.JWT(email, null, key, scopes);
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost');
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  console.log('✅ Using OAuth2 with refresh token');
+  return oauth2Client;
 }
 
 function ordinal(n) {
@@ -411,117 +355,48 @@ async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, 
   await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
 }
 
-// ── Create a new spreadsheet via Drive API ───────────────────────────────────
-// Uses OAuth2 (personal account) if configured — avoids service account quota issues
-// Falls back to service account auth if OAuth2 not set up
-async function driveCreateSpreadsheet(auth, title) {
-  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
-
-  if (!folderId) throw new Error(
-    'GOOGLE_DRIVE_FOLDER_ID is not set. Create a Google Drive folder, share it with the service account, and add the folder ID to Railway variables.'
-  );
-
-  // Prefer OAuth2 so the file is owned by your personal account (no quota issues)
-  const driveAuth = getOAuthClient() || auth;
-  const drive     = google.drive({ version: 'v3', auth: driveAuth });
-
-  const res = await drive.files.create({
-    requestBody: {
-      name:     title,
-      mimeType: 'application/vnd.google-apps.spreadsheet',
-      parents:  [folderId],
-    },
-    fields:            'id',
-    supportsAllDrives: true,
-  });
-
-  const fileId = res.data.id;
-
-  // Share the new file with the service account so it can read/write sheet data
-  if (getOAuthClient()) {
-    try {
-      let saEmail = '';
-      if (process.env.GOOGLE_CREDENTIALS_JSON) {
-        saEmail = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON).client_email;
-      } else {
-        saEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.GOOGLE_SERVICE_EMAIL || '';
-      }
-      if (saEmail) {
-        await drive.permissions.create({
-          fileId,
-          requestBody: { role: 'writer', type: 'user', emailAddress: saEmail },
-        });
-        console.log(`✅ Shared new sheet with service account: ${saEmail}`);
-      }
-    } catch (e) {
-      console.warn('⚠️ Could not share with service account:', e.message);
-    }
-  }
-
-  return fileId;
-}
-
-// ── Create and set up a new scrim sheet per server ────────────────────────────
+// ── Create a new spreadsheet: one tab per lobby, numMatches match columns ─────
 async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = ['A','B','C','D'], numMatches = 150) {
   const auth   = getAuth();
   const sheets = google.sheets({ version:'v4', auth });
+  const drive  = google.drive({ version:'v3', auth });
 
-  // Create a fresh sheet via Drive API (service accounts CAN do this)
-  const spreadsheetId = await driveCreateSpreadsheet(auth, `${scrimName} — SCRIM SHEET`);
+  // 1. Create spreadsheet (in the OAuth user's Google Drive)
+  const create = await sheets.spreadsheets.create({
+    requestBody: {
+      properties: { title: `${scrimName} — SCRIM SHEET` },
+      sheets: lobbyLetters.map(l => ({ properties: { title: `Lobby ${l}` } })),
+    },
+  });
 
-  // 1. Get the auto-created "Sheet1" tab metadata
-  const meta           = await sheets.spreadsheets.get({ spreadsheetId });
-  const existingSheets = meta.data.sheets;
-  const existingTitles = existingSheets.map(s => s.properties.title);
-  const neededTitles   = lobbyLetters.map(l => `Lobby ${l}`);
+  const spreadsheetId = create.data.spreadsheetId;
+  const sheetMeta     = create.data.sheets;
 
-  const requests = [];
-
-  // Rename the default "Sheet1" to "Lobby A"
-  const firstSheet = existingSheets[0];
-  if (firstSheet && !existingTitles.includes('Lobby A')) {
-    requests.push({
-      updateSheetProperties: {
-        properties: { sheetId: firstSheet.properties.sheetId, title: 'Lobby A' },
-        fields: 'title',
-      },
+  // 2. Anyone with link can EDIT
+  try {
+    await drive.permissions.create({
+      fileId: spreadsheetId,
+      requestBody: { role: 'writer', type: 'anyone' },
     });
+  } catch (permErr) {
+    console.warn('⚠️ Could not set public permissions:', permErr.message);
   }
-
-  // Add remaining lobby tabs (B, C, D, …)
-  for (const title of neededTitles) {
-    const alreadyFirst = title === 'Lobby A' && !existingTitles.includes('Lobby A');
-    if (!existingTitles.includes(title) && !alreadyFirst) {
-      requests.push({ addSheet: { properties: { title } } });
-    }
-  }
-
-  if (requests.length > 0) {
-    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
-  }
-
-  // 2. Re-fetch to get updated sheetIds
-  const updated      = await sheets.spreadsheets.get({ spreadsheetId });
-  const updatedSheets = updated.data.sheets;
 
   // 3. Per-lobby: write values → format → formulas
-  for (const letter of lobbyLetters) {
-    const title     = `Lobby ${letter}`;
-    const sheetMeta = updatedSheets.find(s => s.properties.title === title);
-    if (!sheetMeta) { console.warn(`⚠️ Tab "${title}" not found — skipping`); continue; }
-
-    const sheetId   = sheetMeta.properties.sheetId;
-    const valueRows = buildValueRows(slotsPerLobby, numMatches);
+  for (let idx = 0; idx < lobbyLetters.length; idx++) {
+    const sheetId    = sheetMeta[idx].properties.sheetId;
+    const sheetTitle = sheetMeta[idx].properties.title;
+    const valueRows  = buildValueRows(slotsPerLobby, numMatches);
 
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${title}!A1`,
+      range: `${sheetTitle}!A1`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: valueRows },
     });
 
     await formatLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
-    await writeLobbyFormulas(sheets, spreadsheetId, title, slotsPerLobby, numMatches);
+    await writeLobbyFormulas(sheets, spreadsheetId, sheetTitle, slotsPerLobby, numMatches);
     await protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
   }
 
