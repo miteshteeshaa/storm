@@ -333,57 +333,8 @@ async function handleReactionAdd(reaction, user) {
       return;
     }
 
-    if (SLOT_EMOJIS[emoji] !== undefined) {
-      const slotNum = SLOT_EMOJIS[emoji];
-
-      if (!team.lobby) {
-        reaction.users.remove(user.id).catch(() => {});
-        return;
-      }
-
-      const newLobby = team.lobby;
-
-      // Check slot isn't already taken
-      const slotTaken = data.slots.find(
-        (t, idx) => idx !== cardInfo.teamIndex && t.lobby === newLobby && t.lobby_slot === slotNum
-      );
-      if (slotTaken) {
-        reaction.users.remove(user.id).catch(() => {});
-        return;
-      }
-
-      team.lobby_slot = slotNum;
-
-      // Save immediately
-      data.slots[cardInfo.teamIndex] = team;
-      setRegistrations(guild.id, data);
-
-      // Update card + slot list instantly
-      await Promise.all([
-        updateTeamCardEmbed(message, team),
-        refreshAllSlotLists(guild, config, settings, lobbyConf, data, team.lobby),
-        team.lobby && team.lobby_slot && lobbyConf[team.lobby]?.channel_id
-          ? postToLobbyChannel(guild, team, lobbyConf, settings, data)
-          : Promise.resolve(),
-      ]);
-
-      // Background: remove other slot reactions + role + sheet
-      Promise.all([
-        ...Object.keys(SLOT_EMOJIS).filter(n => n !== emoji).map(n => {
-          const r = message.reactions.cache.find(r => r.emoji.name === n);
-          return r ? r.users.remove(user.id).catch(() => {}) : Promise.resolve();
-        }),
-        lobbyConf[newLobby]?.role_id
-          ? Promise.all((team.players || [team.manager_id, team.captain_id]).map(pid =>
-              guild.members.fetch(pid).then(m => m.roles.add(lobbyConf[newLobby].role_id)).catch(() => {})
-            ))
-          : Promise.resolve(),
-        syncSheet(guild, config, data),
-      ]).catch(() => {});
-      return;
-    }
-
-    // Not a recognised emoji on a team card — ignore
+    // Slot numbers are assigned automatically by the bot — no manual slot emoji needed.
+    // Any unrecognised emoji on a team card is silently ignored.
     return;
   }
 
@@ -454,7 +405,7 @@ async function handleReactionRemove(reaction, user) {
     const team      = data.slots[cardInfo.teamIndex];
     if (!team) return;
 
-    // Removing a lobby letter emoji = unassign the lobby (and slot)
+    // Removing a lobby letter emoji = unassign the lobby (and auto-assigned slot)
     if (LOBBY_EMOJIS[emoji] !== undefined && team.lobby === LOBBY_EMOJIS[emoji]) {
       const lc = lobbyConf[team.lobby];
       if (lc?.role_id) {
@@ -466,22 +417,10 @@ async function handleReactionRemove(reaction, user) {
         }
       }
       delete team.lobby;
-      delete team.lobby_slot;
+      delete team.lobby_slot; // slot was auto-assigned with lobby, clear both together
     }
 
-    // Removing a godsent slot emoji = unassign slot number from this team
-    if (SLOT_EMOJIS[emoji] !== undefined && team.lobby_slot === SLOT_EMOJIS[emoji]) {
-      const lc = lobbyConf[team.lobby];
-      if (lc?.role_id) {
-        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
-          try {
-            const m = await guild.members.fetch(playerId);
-            await m.roles.remove(lc.role_id).catch(() => {});
-          } catch {}
-        }
-      }
-      delete team.lobby_slot;
-    }
+    // No slot emoji handling — slots are assigned automatically, not via emoji
 
     data.slots[cardInfo.teamIndex] = team;
     setRegistrations(guild.id, data);
