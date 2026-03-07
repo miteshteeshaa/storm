@@ -53,6 +53,7 @@ function buildStepMenu(settings) {
         { label: 'Google Sheet URL',        value: 'sheet_url',           description: 'Link to Google Sheet' },
         { label: 'Results Template Image',   value: 'results_template',    description: 'Upload background image for /results' },
         { label: 'Results Font Colour',      value: 'results_font_color',  description: 'Text colour for /results overlay (hex e.g. #FFFFFF)' },
+        { label: 'Chicken Dinner Logo',      value: 'chicken_dinner_logo', description: 'Upload logo shown for #1 finish teams on /results' },
         { label: 'View Current Config',     value: 'view_config',         description: 'See full configuration' },
       ])
   );
@@ -122,6 +123,7 @@ function buildConfigEmbed(config, settings, lobbyConf) {
       },
       { name: '📊 Google Sheet', value: config.sheet_url ? `[Open Sheet](${config.sheet_url})` : '`Not Set`', inline: false },
       { name: '🎨 Results Colours', value: `Text: \`${config.results_font_color || '#FFFFFF'}\`  Accent: \`${config.results_accent_color || '#FFD700'}\``, inline: false },
+      { name: '🍗 Chicken Dinner Logo', value: config.chicken_dinner_logo_path ? '✅ Uploaded' : '`Not Set`', inline: false },
     )
     .setTimestamp();
 }
@@ -320,6 +322,41 @@ module.exports = {
             stream.on('error', reject);
           });
           setConfig(interaction.guildId, { results_template_path: savePath });
+          await collected.first().delete().catch(() => {});
+          const r = fresh();
+          await interaction.editReply({ content: null, embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+        } catch {
+          const r = fresh();
+          await interaction.editReply({ content: null, embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+        }
+        continue;
+
+      // ── Chicken dinner logo upload ────────────────────────────────────────
+      } else if (value === 'chicken_dinner_logo') {
+        await i.update({
+          embeds: [],
+          components: [],
+          content: '🍗 **Upload your Chicken Dinner logo** (PNG with transparency recommended)\nSend it as a message attachment in this channel within 60 seconds.',
+        });
+        try {
+          const collected = await interaction.channel.awaitMessages({
+            filter: m => m.author.id === interaction.user.id && m.attachments.size > 0,
+            max: 1, time: 60_000, errors: ['time'],
+          });
+          const attachment = collected.first().attachments.first();
+          const { default: fetch } = require('node-fetch');
+          const { createWriteStream, mkdirSync } = require('fs');
+          const templateDir = process.env.DATA_DIR || '/data';
+          mkdirSync(templateDir, { recursive: true });
+          const savePath = `${templateDir}/chicken_dinner_logo_${interaction.guildId}.png`;
+          const res = await fetch(attachment.url);
+          await new Promise((resolve, reject) => {
+            const stream = createWriteStream(savePath);
+            res.body.pipe(stream);
+            stream.on('finish', resolve);
+            stream.on('error', reject);
+          });
+          setConfig(interaction.guildId, { chicken_dinner_logo_path: savePath });
           await collected.first().delete().catch(() => {});
           const r = fresh();
           await interaction.editReply({ content: null, embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
