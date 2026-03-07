@@ -56,6 +56,10 @@ module.exports = {
         return replyError(interaction, errorEmbed('Tag Taken', `**[${teamTag}]** is already registered.`));
       if (allTeams.find(t => t.team_name.toLowerCase() === teamName.toLowerCase()))
         return replyError(interaction, errorEmbed('Name Taken', `**${teamName}** is already registered.`));
+      if (allTeams.find(t => t.captain_id === captainId || t.manager_id === captainId))
+        return replyError(interaction, errorEmbed('Already Registered', `<@${captainId}> is already registered in another team.`));
+      if (allTeams.find(t => t.manager_id === manager.id || t.captain_id === manager.id))
+        return replyError(interaction, errorEmbed('Already Registered', `<@${manager.id}> is already registered in another team.`));
 
       const isWaitlist = data.slots.length >= settings.slots;
       const queueNum   = isWaitlist ? data.waitlist.length + 1 : data.slots.length + 1;
