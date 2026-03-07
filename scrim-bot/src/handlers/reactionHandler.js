@@ -6,7 +6,20 @@ const {
 } = require('../utils/database');
 
 // ── In-memory stores ──────────────────────────────────────────────────────────
-const confirmSessions   = new Map();
+const confirmSessions   = new Map(); // guildId → array of { confirmMessageId, channelId }
+
+function registerConfirmSession(guildId, confirmMessageId, channelId, _unused) {
+  const existing = confirmSessions.get(guildId) || [];
+  // Replace session for this channel if already exists
+  const idx = existing.findIndex(s => s.channelId === channelId);
+  if (idx >= 0) existing[idx] = { confirmMessageId, channelId };
+  else existing.push({ confirmMessageId, channelId });
+  confirmSessions.set(guildId, existing);
+}
+function getConfirmSessions(guildId) { return confirmSessions.get(guildId) || []; }
+// Keep legacy getter for any other callers
+function getConfirmSession(guildId) { return getConfirmSessions(guildId)[0] || null; }
+
 const persistentSlotIds = new Map();
 const teamCardMap       = new Map();
 
@@ -126,17 +139,18 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
 }
 
 // ── Build confirm slot list ───────────────────────────────────────────────────
-function buildConfirmSlotList(slots, settings) {
+function buildConfirmSlotList(slots, settings, lobbyFilter = null) {
   const { scrim_name, lobbies: numLobbies } = settings;
-  const lobbyLetters = ['A','B','C','D','E','F'].slice(0, numLobbies);
+  const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+  const toShow = lobbyFilter ? [lobbyFilter] : lobbyLetters;
 
   const lobbyGroups = {};
-  for (const l of lobbyLetters) lobbyGroups[l] = [];
+  for (const l of toShow) lobbyGroups[l] = [];
   for (const t of slots) { if (t.lobby && lobbyGroups[t.lobby]) lobbyGroups[t.lobby].push(t); }
 
   const fields = [];
-  for (const letter of lobbyLetters) {
-    const teams = lobbyGroups[letter].sort((a, b) => a.lobby_slot - b.lobby_slot);
+  for (const letter of toShow) {
+    const teams = (lobbyGroups[letter] || []).sort((a, b) => a.lobby_slot - b.lobby_slot);
     if (teams.length === 0) continue;
     const lines = teams.map(t => {
       const e   = numEmoji(t.lobby_slot);
@@ -148,9 +162,11 @@ function buildConfirmSlotList(slots, settings) {
     fields.push({ name: `🏟️ Lobby ${letter}`, value: lines.join('\n'), inline: true });
   }
 
-  const confirmed = slots.filter(t => t.confirmed === true).length;
-  const cancelled = slots.filter(t => t.confirmed === false).length;
-  const pending   = slots.filter(t => t.lobby && t.confirmed === undefined).length;
+  // Stats scoped to the filtered lobby only
+  const scopedSlots = lobbyFilter ? slots.filter(t => t.lobby === lobbyFilter) : slots;
+  const confirmed = scopedSlots.filter(t => t.confirmed === true).length;
+  const cancelled = scopedSlots.filter(t => t.confirmed === false).length;
+  const pending   = scopedSlots.filter(t => t.lobby && t.confirmed === undefined).length;
 
   return new EmbedBuilder()
     .setColor(0xFFD700)
@@ -317,8 +333,10 @@ async function handleReactionAdd(reaction, user) {
   }
 
   // ── TEAM confirming on /confirm message ───────────────────────────────────
-  const session = getConfirmSession(guild.id);
-  if (!session || message.id !== session.confirmMessageId) return;
+  // Check all registered sessions (one per lobby channel)
+  const sessions = getConfirmSessions(guild.id);
+  const session  = sessions.find(s => s.confirmMessageId === message.id);
+  if (!session) return;
   if (emoji !== '✅' && emoji !== '❌') return;
 
   const config      = getConfig(guild.id);
@@ -326,18 +344,23 @@ async function handleReactionAdd(reaction, user) {
   const lobbyConf   = getLobbyConfig(guild.id);
   const data        = getRegistrations(guild.id);
   const teamIndex   = data.slots.findIndex(t => t.captain_id === user.id || t.manager_id === user.id);
-  if (teamIndex === -1) return;
+  if (teamIndex === -1) {
+    // Not a registered captain/manager — remove their reaction silently
+    try { await reaction.users.remove(user.id); } catch {}
+    return;
+  }
 
   if (emoji === '✅') {
     data.slots[teamIndex].confirmed = true;
-    try { await message.reactions.cache.get('❌')?.users.remove(user.id); } catch {}
   } else {
     data.slots[teamIndex].confirmed = false;
-    try { await message.reactions.cache.get('✅')?.users.remove(user.id); } catch {}
   }
 
+  // Always remove the user's reaction so the count stays clean
+  try { await reaction.users.remove(user.id); } catch {}
+
   setRegistrations(guild.id, data);
-  await refreshConfirmList(guild, session, settings, data);
+  // Update the persistent slot list in all lobby channels (underline/strikethrough)
   await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
   await syncSheet(guild, config, data);
 }
@@ -408,25 +431,10 @@ async function handleReactionRemove(reaction, user) {
     return;
   }
 
-  const session = getConfirmSession(guild.id);
-  if (!session || message.id !== session.confirmMessageId) return;
-  if (emoji !== '✅' && emoji !== '❌') return;
-
-  const config    = getConfig(guild.id);
-  const settings  = getScrimSettings(guild.id);
-  const lobbyConf = getLobbyConfig(guild.id);
-  const data      = getRegistrations(guild.id);
-  const ti        = data.slots.findIndex(t => t.captain_id === user.id || t.manager_id === user.id);
-  if (ti === -1) return;
-
-  if (emoji === '✅' && data.slots[ti].confirmed === true)  delete data.slots[ti].confirmed;
-  if (emoji === '❌' && data.slots[ti].confirmed === false) delete data.slots[ti].confirmed;
-
-  setRegistrations(guild.id, data);
-  await refreshConfirmList(guild, session, settings, data);
-  await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-  await syncSheet(guild, config, data);
+  // Confirm reactions are auto-removed when added — nothing to handle on remove.
+  // Just return.
 }
+
 
 // ── Post/update lobby-specific slot list in lobby channel ─────────────────────
 async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
@@ -549,6 +557,7 @@ module.exports = {
   handleReactionRemove,
   registerConfirmSession,
   getConfirmSession,
+  getConfirmSessions,
   registerTeamCard,
   buildPersistentSlotList,
   buildConfirmSlotList,
