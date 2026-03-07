@@ -2,34 +2,31 @@ const { EmbedBuilder } = require('discord.js');
 const { syncTeamsToSheet } = require('../utils/sheets');
 const {
   getConfig, getRegistrations, setRegistrations,
-  getScrimSettings, getLobbyConfig
+  getScrimSettings, getLobbyConfig,
+  getConfirmSessions: dbGetConfirmSessions, setConfirmSessions: dbSetConfirmSessions,
+  getSlotListIds, setSlotListIds,
 } = require('../utils/database');
 
-// ── In-memory stores ──────────────────────────────────────────────────────────
-const confirmSessions = new Map(); // guildId → array of { confirmMessageId, channelId, lobbyLetter }
+// ── In-memory team card map (ephemeral, only needed during runtime) ────────────
+const teamCardMap = new Map();
 
+// ── Confirm sessions — persisted to disk so restarts don't break reactions ────
 function registerConfirmSession(guildId, confirmMessageId, channelId, lobbyLetter) {
-  const existing = confirmSessions.get(guildId) || [];
+  const existing = dbGetConfirmSessions(guildId);
   const idx = existing.findIndex(s => s.channelId === channelId);
   const session = { confirmMessageId, channelId, lobbyLetter };
   if (idx >= 0) existing[idx] = session;
   else existing.push(session);
-  confirmSessions.set(guildId, existing);
+  dbSetConfirmSessions(guildId, existing);
 }
-function getConfirmSessions(guildId) { return confirmSessions.get(guildId) || []; }
+function getConfirmSessions(guildId) { return dbGetConfirmSessions(guildId); }
 function getConfirmSession(guildId)  { return getConfirmSessions(guildId)[0] || null; }
 
-const persistentSlotIds = new Map();
-const teamCardMap       = new Map();
+// ── Slot list message IDs — persisted to disk so restarts don't lose them ─────
+function getPersistentSlotListId(guildId)       { return getSlotListIds(guildId); }
+function setPersistentSlotListId(guildId, data) { setSlotListIds(guildId, data); }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function getPersistentSlotListId(guildId)        { return persistentSlotIds.get(guildId) || {}; }
-function setPersistentSlotListId(guildId, data)  { persistentSlotIds.set(guildId, { ...getPersistentSlotListId(guildId), ...data }); }
 function registerTeamCard(messageId, guildId, teamIndex) { teamCardMap.set(messageId, { guildId, teamIndex }); }
-function registerConfirmSession(guildId, confirmMessageId, channelId, slotListMessageId) {
-  confirmSessions.set(guildId, { confirmMessageId, channelId, slotListMessageId });
-}
-function getConfirmSession(guildId) { return confirmSessions.get(guildId) || null; }
 
 // ── Emoji maps ────────────────────────────────────────────────────────────────
 // Regional indicator letters A–J → lobby letter
