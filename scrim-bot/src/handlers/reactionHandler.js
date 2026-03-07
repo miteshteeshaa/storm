@@ -43,51 +43,47 @@ const LOBBY_EMOJIS = {
 const LOBBY_EMOJI_LIST = ['🇦','🇧','🇨','🇩','🇪','🇫','🇬','🇭','🇮','🇯'];
 
 // Maps custom emoji name → slot number (1-30)
-// ⚠️ After uploading the emoji pack to your Discord server, replace each ID below
-// with the actual Discord emoji ID (right-click emoji → Copy ID in developer mode)
 const SLOT_EMOJIS = {
-  'num_01': 1,  'num_02': 2,  'num_03': 3,  'num_04': 4,  'num_05': 5,
-  'num_06': 6,  'num_07': 7,  'num_08': 8,  'num_09': 9,  'num_10': 10,
-  'num_11': 11, 'num_12': 12, 'num_13': 13, 'num_14': 14, 'num_15': 15,
-  'num_16': 16, 'num_17': 17, 'num_18': 18, 'num_19': 19, 'num_20': 20,
-  'num_21': 21, 'num_22': 22, 'num_23': 23, 'num_24': 24, 'num_25': 25,
-  'num_26': 26, 'num_27': 27, 'num_28': 28, 'num_29': 29, 'num_30': 30,
+  '309551':    1, '449812':    2, 'num_03':    3, '730734':    4, '979255':    5,
+  '363176':    6, '906647':    7, '471908':    8, '225589':    9, '297510':   10,
+  '8707711':  11, '9006012':  12, '5759813':  13, '8449714':  14, '5880615':  15,
+  '7229116':  16, '1209217':  17, '1247418':  18, '7056819':  19, '3659020':  20,
+  '26614521': 21, '79660622': 22, '7841623':  23, '76300424': 24, '13699925': 25,
+  '11262626': 26, '16010527': 27, '76306228': 28, '67755429': 29, '65811430': 30,
 };
 
-// Emoji IDs for reacting on team cards — must match SLOT_EMOJIS names above
-// Format: { name, id } where id is the Discord snowflake from your server
-// ⚠️ Fill in these IDs after uploading the emoji pack to your Discord server
+// Emoji list for reacting on team cards (slot 3 ID missing — add it when you have it)
 const SLOT_EMOJI_LIST = [
-  { name: 'num_01', id: 'REPLACE_ME' },
-  { name: 'num_02', id: 'REPLACE_ME' },
-  { name: 'num_03', id: 'REPLACE_ME' },
-  { name: 'num_04', id: 'REPLACE_ME' },
-  { name: 'num_05', id: 'REPLACE_ME' },
-  { name: 'num_06', id: 'REPLACE_ME' },
-  { name: 'num_07', id: 'REPLACE_ME' },
-  { name: 'num_08', id: 'REPLACE_ME' },
-  { name: 'num_09', id: 'REPLACE_ME' },
-  { name: 'num_10', id: 'REPLACE_ME' },
-  { name: 'num_11', id: 'REPLACE_ME' },
-  { name: 'num_12', id: 'REPLACE_ME' },
-  { name: 'num_13', id: 'REPLACE_ME' },
-  { name: 'num_14', id: 'REPLACE_ME' },
-  { name: 'num_15', id: 'REPLACE_ME' },
-  { name: 'num_16', id: 'REPLACE_ME' },
-  { name: 'num_17', id: 'REPLACE_ME' },
-  { name: 'num_18', id: 'REPLACE_ME' },
-  { name: 'num_19', id: 'REPLACE_ME' },
-  { name: 'num_20', id: 'REPLACE_ME' },
-  { name: 'num_21', id: 'REPLACE_ME' },
-  { name: 'num_22', id: 'REPLACE_ME' },
-  { name: 'num_23', id: 'REPLACE_ME' },
-  { name: 'num_24', id: 'REPLACE_ME' },
-  { name: 'num_25', id: 'REPLACE_ME' },
-  { name: 'num_26', id: 'REPLACE_ME' },
-  { name: 'num_27', id: 'REPLACE_ME' },
-  { name: 'num_28', id: 'REPLACE_ME' },
-  { name: 'num_29', id: 'REPLACE_ME' },
-  { name: 'num_30', id: 'REPLACE_ME' },
+  { name: '309551',    id: '1479861605398482975' },  // 1
+  { name: '449812',    id: '1479861721391824978' },  // 2
+  { name: 'num_03',    id: 'REPLACE_ME' },           // 3 ← missing, add ID
+  { name: '730734',    id: '1479861997481758730' },  // 4
+  { name: '979255',    id: '1479862249450504335' },  // 5
+  { name: '363176',    id: '1479861643411193990' },  // 6
+  { name: '906647',    id: '1479862210036629788' },  // 7
+  { name: '471908',    id: '1479861761044910282' },  // 8
+  { name: '225589',    id: '1479861527509995531' },  // 9
+  { name: '297510',    id: '1479861328909701282' },  // 10
+  { name: '8707711',   id: '1479862138360041718' },  // 11
+  { name: '9006012',   id: '1479862174594760815' },  // 12
+  { name: '5759813',   id: '1479861820050247853' },  // 13
+  { name: '8449714',   id: '1479862102046015640' },  // 14
+  { name: '5880615',   id: '1479861879802302577' },  // 15
+  { name: '7229116',   id: '1479861956415328460' },  // 16
+  { name: '1209217',   id: '1479861398006796388' },  // 17
+  { name: '1247418',   id: '1479861436955103514' },  // 18
+  { name: '7056819',   id: '1479861917727326280' },  // 19
+  { name: '3659020',   id: '1479861686226780241' },  // 20
+  { name: '26614521',  id: '1479862409710665880' },  // 21
+  { name: '79660622',  id: '1479862661134024714' },  // 22
+  { name: '7841623',   id: '1479862045095755847' },  // 23
+  { name: '76300424',  id: '1479862584134991924' },  // 24
+  { name: '13699925',  id: '1479862331767914578' },  // 25
+  { name: '11262626',  id: '1479862290823118918' },  // 26
+  { name: '16010527',  id: '1479862370581872650' },  // 27
+  { name: '76306228',  id: '1479862620835021003' },  // 28
+  { name: '67755429',  id: '1479862539071525097' },  // 29
+  { name: '65811430',  id: '1479862456950980670' },  // 30
 ];
 
 // Unicode circled numbers for slot display (works in every server, no custom emojis needed)
