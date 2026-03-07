@@ -3,7 +3,7 @@ const {
   getConfig, getRegistrations, setRegistrations, getScrimSettings
 } = require('../../utils/database');
 const { errorEmbed } = require('../../utils/embeds');
-const { isActivated, isRegistrationOpen } = require('../../utils/permissions');
+const { isActivated, isRegistrationOpen, isAdmin } = require('../../utils/permissions');
 const { syncTeamsToSheet } = require('../../utils/sheets');
 const { registerTeamCard, SLOT_EMOJI_LIST, LOBBY_EMOJI_IDS } = require('../../handlers/reactionHandler');
 
@@ -29,10 +29,22 @@ module.exports = {
       // Validate synchronously first — no async before reply
       if (!isActivated(interaction.guildId))
         return interaction.reply({ embeds: [errorEmbed('Bot Not Active', 'The scrim bot is not active.')], ephemeral: true });
-      if (!isRegistrationOpen(interaction.guildId))
+
+      const config     = getConfig(interaction.guildId);
+      const adminUser  = await isAdmin(interaction);
+
+      // ── Registration channel check (applies to everyone) ──────────────────
+      if (config.register_channel && interaction.channelId !== config.register_channel) {
+        return interaction.reply({
+          embeds: [errorEmbed('Wrong Channel', `Please use <#${config.register_channel}> to register.`)],
+          ephemeral: true,
+        });
+      }
+
+      // ── Registration open check (admins can bypass) ───────────────────────
+      if (!isRegistrationOpen(interaction.guildId) && !adminUser)
         return interaction.reply({ embeds: [errorEmbed('Registration Closed', 'Wait for admin to open registration.')], ephemeral: true });
 
-      const config   = getConfig(interaction.guildId);
       const settings = getScrimSettings(interaction.guildId);
       const data     = getRegistrations(interaction.guildId);
 
