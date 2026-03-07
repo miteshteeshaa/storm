@@ -528,9 +528,16 @@ async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter 
     const title  = sheetMeta.properties.title;
     const letter = title.replace('Lobby ', '');
 
-    const scoringRes   = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!A3:B${2 + slotsPerLobby}` });
-    const placementPts = (scoringRes.data.values || []).map(r => parseInt(r[1]) || 0);
+    // Read header row starting from G to count how many match columns exist
+    const headerRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!G1:ZZ1` });
+    const headerRow = (headerRes.data.values || [[]])[0] || [];
+    let numMatches = 0;
+    for (let i = 0; i < headerRow.length; i += 2) {
+      if (!headerRow[i] || headerRow[i].includes('TOTAL')) break;
+      numMatches++;
+    }
 
+    // Read all data columns starting from D
     const fullRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!D3:ZZ${2 + slotsPerLobby}` });
     const rows    = fullRes.data.values || [];
 
@@ -538,15 +545,25 @@ async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter 
       const teamName = row[1] || '';
       if (!teamName || teamName === '-') continue;
 
-      let tPlace = 0, tKill = 0, tWins = 0;
-      for (let m = 0; (3 + m * 2 + 1) < row.length; m++) {
-        const place = parseInt(row[3 + m * 2]);
-        const kills = parseInt(row[3 + m * 2 + 1]) || 0;
-        if (!isNaN(place) && place >= 1 && place <= placementPts.length) {
-          tPlace += placementPts[place - 1];
-          if (place === 1) tWins++;
-        }
-        tKill += kills;
+      // Column offsets from D (0-based):
+      // 0=slot, 1=team name, 2=tag
+      // 3..3+numMatches*2-1 = match pairs (place, kills)
+      // 3+numMatches*2     = TOTAL PLACEMENT PTS
+      // 3+numMatches*2+1   = TOTAL KILL PTS
+      // 3+numMatches*2+2   = GRAND TOTAL
+      const tPlaceIdx = 3 + numMatches * 2;
+      const tKillIdx  = tPlaceIdx + 1;
+      const tTotalIdx = tPlaceIdx + 2;
+
+      // Read directly from the sheet's calculated total columns
+      const tPlace = parseInt(row[tPlaceIdx]) || 0;
+      const tKill  = parseInt(row[tKillIdx])  || 0;
+      const total  = parseInt(row[tTotalIdx]) || (tPlace + tKill);
+
+      // Count wins (1st place finishes) from match columns only
+      let tWins = 0;
+      for (let m = 0; m < numMatches; m++) {
+        if (parseInt(row[3 + m * 2]) === 1) tWins++;
       }
 
       all.push({
@@ -556,7 +573,7 @@ async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter 
         team_tag:      row[2] || '',
         placement_pts: tPlace,
         kill_pts:      tKill,
-        total:         tPlace + tKill,
+        total,
         wins:          tWins,
       });
     }
