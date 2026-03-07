@@ -3,7 +3,53 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { loadCommands, deployCommands } = require('./handlers/commandHandler');
 const interactionHandler = require('./handlers/interactionHandler');
 const { handleReactionAdd, handleReactionRemove } = require('./handlers/reactionHandler');
+const { getConfig, getRegistrations, getScrimSettings } = require('./utils/database');
+const { setTeamCard, getTeamCards } = require('./utils/database');
 const http = require('http');
+
+// ── Rebuild team card map on startup ─────────────────────────────────────────
+// Scans slotlist channel for bot messages and matches them to registered teams
+async function rebuildTeamCards(client) {
+  for (const [guildId, guild] of client.guilds.cache) {
+    try {
+      const config = getConfig(guildId);
+      const data   = getRegistrations(guildId);
+      if (!config.slotlist_channel || !data.slots.length) continue;
+
+      const channel = await guild.channels.fetch(config.slotlist_channel).catch(() => null);
+      if (!channel) continue;
+
+      // Fetch up to 100 recent messages in the slotlist channel
+      const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+      if (!messages) continue;
+
+      const existing = getTeamCards(guildId);
+      let rebuilt = 0;
+
+      for (const [msgId, msg] of messages) {
+        if (!msg.author.bot) continue;
+        const embed = msg.embeds?.[0];
+        if (!embed?.title) continue;
+
+        // Match embed title "[TAG] Team Name" to a registered team
+        const teamIndex = data.slots.findIndex(t => {
+          const expected = `[${t.team_tag}] ${t.team_name}`;
+          return embed.title === expected;
+        });
+
+        if (teamIndex !== -1 && existing[msgId] === undefined) {
+          setTeamCard(guildId, msgId, teamIndex);
+          rebuilt++;
+          console.log(`[REBUILD] guild=${guildId} msg=${msgId} → teamIndex=${teamIndex} (${data.slots[teamIndex].team_name})`);
+        }
+      }
+
+      if (rebuilt > 0) console.log(`[REBUILD] Rebuilt ${rebuilt} team card(s) for guild ${guildId}`);
+    } catch (err) {
+      console.error(`[REBUILD] Error for guild ${guildId}:`, err.message);
+    }
+  }
+}
 
 // ─── Keep-alive server ────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
@@ -54,6 +100,9 @@ client.once('ready', async () => {
 
   await loadCommands(client);
   await deployCommands(client);
+
+  // Rebuild team card map from existing Discord messages (survives restarts)
+  await rebuildTeamCards(client);
 });
 
 // ─── Slash commands & components ──────────────────────────────────────────────
@@ -72,15 +121,14 @@ process.on('uncaughtException', (err) => {
 });
 
 // ─── Auto-sync sheet every 20 minutes ────────────────────────────────────────
-const { getConfig: _getConfig, getRegistrations: _getRegs } = require('./utils/database');
 const { syncTeamsToSheet: _syncSheet } = require('./utils/sheets');
 
 async function autoSyncAllGuilds() {
   for (const [guildId] of client.guilds.cache) {
     try {
-      const cfg  = _getConfig(guildId);
+      const cfg  = getConfig(guildId);
       if (!cfg.spreadsheet_id) continue;
-      const data = _getRegs(guildId);
+      const data = getRegistrations(guildId);
       if (!data.slots || data.slots.length === 0) continue;
       await _syncSheet(cfg.spreadsheet_id, data.slots);
       console.log(`🔄 Auto-synced sheet for guild ${guildId}`);
