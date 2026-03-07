@@ -287,6 +287,27 @@ async function handleReactionAdd(reaction, user) {
 
       const prevLobby = team.lobby;
 
+      // ── Duplicate check: same tag+name already has a slot in any lobby ──────
+      const duplicate = data.slots.find((t, idx) =>
+        idx !== cardInfo.teamIndex &&
+        t.lobby && t.lobby_slot &&
+        t.team_tag === team.team_tag &&
+        t.team_name === team.team_name
+      );
+      if (duplicate) {
+        // Flash ⚠️ for 2 seconds then remove it — do NOT assign slot
+        reaction.users.remove(user.id).catch(() => {});
+        (async () => {
+          try {
+            await message.react('⚠️');
+            await new Promise(r => setTimeout(r, 2000));
+            const warningReaction = message.reactions.cache.get('⚠️');
+            if (warningReaction) await warningReaction.remove().catch(() => {});
+          } catch {}
+        })();
+        return;
+      }
+
       team.lobby = newLobby;
       // Clear old slot BEFORE calling nextAvailableSlot so this team's own
       // previous slot isn't counted as taken, allowing correct gap-filling
