@@ -436,32 +436,36 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
   try {
     const ch    = await guild.channels.fetch(lc.channel_id);
     const embed = buildPersistentSlotList(data.slots, settings, team.lobby);
-
-    const ids    = getPersistentSlotListId(guild.id);
     const msgKey = `lobby_${team.lobby}`;
+    const ids    = getPersistentSlotListId(guild.id);
 
+    // 1. Try editing by stored message ID (fast path)
     if (ids[msgKey]) {
       try {
         const existing = await ch.messages.fetch(ids[msgKey]);
         await existing.edit({ embeds: [embed] });
         return;
-      } catch {}
+      } catch {
+        // Message deleted or inaccessible — clear stale ID and fall through
+        setPersistentSlotListId(guild.id, { [msgKey]: null });
+      }
     }
 
-    const msgs     = await ch.messages.fetch({ limit: 20 });
-    const existing = msgs.find(m =>
-      m.author.id === guild.client?.user?.id || m.author.bot &&
-      m.embeds[0]?.title?.includes(`Lobby ${team.lobby}`)
+    // 2. Scan channel for any existing bot slot list for this lobby and delete all of them
+    const msgs = await ch.messages.fetch({ limit: 50 });
+    const botId = guild.client?.user?.id;
+    const existing = msgs.filter(m =>
+      m.author.id === botId &&
+      m.embeds?.[0]?.title?.includes(`Lobby ${team.lobby}`)
     );
-
-    if (existing) {
-      setPersistentSlotListId(guild.id, { [msgKey]: existing.id });
-      await existing.edit({ embeds: [embed] });
-    } else {
-      const newMsg = await ch.send({ embeds: [embed] });
-      setPersistentSlotListId(guild.id, { [msgKey]: newMsg.id });
-      try { await newMsg.pin(); } catch {}
+    for (const [, m] of existing) {
+      try { await m.unpin().catch(() => {}); await m.delete(); } catch {}
     }
+
+    // 3. Post fresh pinned message
+    const newMsg = await ch.send({ embeds: [embed] });
+    setPersistentSlotListId(guild.id, { [msgKey]: newMsg.id });
+    try { await newMsg.pin(); } catch {}
   } catch (err) {
     console.error(`⚠️ Lobby channel post error:`, err.message);
   }
@@ -481,16 +485,40 @@ async function syncSheet(guild, config, data) {
 // ── Refresh all slot lists ────────────────────────────────────────────────────
 async function refreshAllSlotLists(guild, config, settings, lobbyConf, data) {
   const ids = getPersistentSlotListId(guild.id);
+  const botId = guild.client?.user?.id;
+  const LOBBY_LETTERS = ['A','B','C','D','E','F','G','H','I','J'].slice(0, settings.lobbies || 4);
 
-  const lobbyLetters = ['A','B','C','D','E','F'].slice(0, settings.lobbies || 4);
-  for (const letter of lobbyLetters) {
+  for (const letter of LOBBY_LETTERS) {
     const lc     = lobbyConf[letter];
     const msgKey = `lobby_${letter}`;
-    if (!lc?.channel_id || !ids[msgKey]) continue;
+    if (!lc?.channel_id) continue;
+
     try {
-      const ch  = await guild.channels.fetch(lc.channel_id);
-      const msg = await ch.messages.fetch(ids[msgKey]);
-      await msg.edit({ embeds: [buildPersistentSlotList(data.slots, settings, letter)] });
+      const ch    = await guild.channels.fetch(lc.channel_id);
+      const embed = buildPersistentSlotList(data.slots, settings, letter);
+
+      // Try stored ID first
+      if (ids[msgKey]) {
+        try {
+          const msg = await ch.messages.fetch(ids[msgKey]);
+          await msg.edit({ embeds: [embed] });
+          continue;
+        } catch {
+          setPersistentSlotListId(guild.id, { [msgKey]: null });
+        }
+      }
+
+      // Fall back: scan for existing bot slot list message
+      const msgs = await ch.messages.fetch({ limit: 50 });
+      const existing = msgs.find(m =>
+        m.author.id === botId &&
+        m.embeds?.[0]?.title?.includes(`Lobby ${letter}`)
+      );
+      if (existing) {
+        setPersistentSlotListId(guild.id, { [msgKey]: existing.id });
+        await existing.edit({ embeds: [embed] });
+      }
+      // If nothing found, don't post — postToLobbyChannel handles initial post
     } catch {}
   }
 }
