@@ -94,6 +94,20 @@ function clearMatches(guildId) {
   writeDB('matches', db);
 }
 
+function getConfirmSessions(guildId) { return readDB('confirm_sessions')[guildId] || []; }
+function setConfirmSessions(guildId, sessions) {
+  const db = readDB('confirm_sessions');
+  db[guildId] = sessions;
+  writeDB('confirm_sessions', db);
+}
+
+function getSlotListIds(guildId) { return readDB('slot_list_ids')[guildId] || {}; }
+function setSlotListIds(guildId, data) {
+  const db = readDB('slot_list_ids');
+  db[guildId] = { ...(db[guildId] || {}), ...data };
+  writeDB('slot_list_ids', db);
+}
+
 module.exports = {
   getServer, setServer,
   getConfig, setConfig,
@@ -101,4 +115,6 @@ module.exports = {
   getLobbyConfig, setLobbyConfig,
   getRegistrations, setRegistrations, clearRegistrations,
   getMatches, setMatch, clearMatches,
+  getConfirmSessions, setConfirmSessions,
+  getSlotListIds, setSlotListIds,
 };
