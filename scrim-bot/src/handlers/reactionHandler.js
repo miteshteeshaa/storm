@@ -347,8 +347,50 @@ async function handleReactionAdd(reaction, user) {
       return;
     }
 
-    // Slot numbers are assigned automatically by the bot — no manual slot emoji needed.
-    // Any unrecognised emoji on a team card is silently ignored.
+    // ── Admin adds ❌ on a card = unassign slot & lobby ──────────────────────
+    if (emoji === '❌') {
+      const oldLobby = team.lobby;
+      if (!oldLobby && !team.lobby_slot) {
+        // Already unassigned — ignore
+        reaction.users.remove(user.id).catch(() => {});
+        return;
+      }
+
+      // Remove lobby role from all players
+      if (oldLobby && lobbyConf[oldLobby]?.role_id) {
+        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
+          try {
+            const m = await guild.members.fetch(playerId);
+            await m.roles.remove(lobbyConf[oldLobby].role_id).catch(() => {});
+          } catch {}
+        }
+      }
+
+      delete team.lobby;
+      delete team.lobby_slot;
+      data.slots[cardInfo.teamIndex] = team;
+      setRegistrations(guild.id, data);
+
+      // Update embed + slotlist immediately
+      await updateTeamCardEmbed(message, team);
+      await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
+      await syncSheet(guild, config, data);
+
+      // Restore lobby letter emojis
+      try {
+        await message.reactions.removeAll();
+        const numLobbies = settings.lobbies || 4;
+        for (let idx = 0; idx < numLobbies; idx++) {
+          const name = LOBBY_EMOJI_LIST[idx];
+          const id   = LOBBY_EMOJI_IDS[name];
+          await message.react(`${name}:${id}`).catch(() => {});
+          await new Promise(r => setTimeout(r, 150));
+        }
+      } catch {}
+      return;
+    }
+
+    // Any other unrecognised emoji — ignore silently
     return;
   }
 
@@ -572,10 +614,21 @@ async function updateTeamCardEmbed(message, team) {
     const old = message.embeds[0];
     if (!old) return;
 
-    // Keep original description (player mentions only), just update color
+    const basePlayers = old.description?.split('\n\n')[0] || old.description || '';
+    let desc = basePlayers;
+    let color = 0x5865F2; // blue = unassigned
+
+    if (team.lobby && team.lobby_slot) {
+      color = 0x00FF7F; // green = fully assigned
+      desc = basePlayers + `\n\n✅ **Lobby ${team.lobby} — Slot ${team.lobby_slot}**`;
+    } else if (team.lobby) {
+      color = 0xFFAA00; // orange = lobby set but no slot (full)
+      desc = basePlayers + `\n\n⏳ **Lobby ${team.lobby} — No slot available**`;
+    }
+
     const updated = EmbedBuilder.from(old)
-      .setColor(team.lobby && team.lobby_slot ? 0x00FF7F : team.lobby ? 0xFFAA00 : 0x5865F2)
-      .setDescription(old.description?.split('\n\n')[0] || old.description || '')  // strip any old lobby text
+      .setColor(color)
+      .setDescription(desc)
       .setFooter({ text: old.footer?.text || '' });
     await message.edit({ embeds: [updated] });
   } catch {}
