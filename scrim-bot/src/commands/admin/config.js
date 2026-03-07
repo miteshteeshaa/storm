@@ -78,6 +78,7 @@ function buildStepMenu(settings) {
         { label: 'Results Template Image',  value: 'results_template',    description: 'Upload background image for /results' },
         { label: 'Results Font Colour',     value: 'results_font_color',  description: 'Text colour for /results overlay (hex e.g. #FFFFFF)' },
         { label: 'Chicken Dinner Logo',     value: 'chicken_dinner_logo', description: 'Upload logo shown for #1 finish teams on /results' },
+        { label: 'Reset Sheet Link',         value: 'reset_sheet',         description: 'Delete sheet link so /link creates a new one' },
         { label: 'View Current Config',     value: 'view_config',         description: 'See full configuration' },
       ])
   );
@@ -496,7 +497,28 @@ module.exports = {
         await m.deferUpdate();
         await interaction.editReply({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
 
-      // ── View / Back ──────────────────────────────────────────────────────
+      // ── Reset Sheet Link ────────────────────────────────────────────────
+      } else if (value === 'reset_sheet') {
+        await i.update({
+          content: '⚠️ **Reset Sheet Link?** The saved sheet link will be deleted.\nRun `/link` afterwards to generate a new sheet. Your existing Google Sheet file is NOT deleted.',
+          embeds: [],
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId('reset_sheet_confirm').setLabel('Yes, Reset').setStyle(ButtonStyle.Danger),
+              new ButtonBuilder().setCustomId('config_back').setLabel('Cancel').setStyle(ButtonStyle.Secondary),
+            ),
+          ],
+        });
+        let j;
+        try { j = await msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 }); }
+        catch { try { await msg.edit({ components: [], content: null }); } catch {} return; }
+        if (j.customId === 'reset_sheet_confirm') {
+          setConfig(interaction.guildId, { sheet_url: null, spreadsheet_id: null });
+        }
+        const r = fresh();
+        await j.update({ content: null, embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
+
+            // ── View / Back ──────────────────────────────────────────────────────
       } else {
         const r = fresh();
         await i.update({ embeds: [buildConfigEmbed(r.config, r.settings, r.lobbyConf)], components: [...buildStepMenu(r.settings)] });
