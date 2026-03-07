@@ -5,9 +5,16 @@
 // Scales to any resolution variant of each layout.
 // Supports chicken dinner logo overlay (1 or 2 logos per team win count).
 
-const { createCanvas, loadImage } = require('canvas');
+const { createCanvas, loadImage, registerFont } = require('canvas');
 const path = require('path');
 const fs   = require('fs');
+
+// Register a bundled font if the system has no fonts (e.g. Railway minimal image)
+// Drop a .ttf into src/assets/ to override — falls back gracefully if not present.
+const ASSET_FONT = path.join(__dirname, '../assets/font.ttf');
+if (fs.existsSync(ASSET_FONT)) {
+  try { registerFont(ASSET_FONT, { family: 'BotFont' }); } catch {}
+}
 
 // ── DUAL PANEL template (851x621 base) ───────────────────────────────────────
 const DUAL = {
@@ -35,14 +42,18 @@ const SINGLE = {
 
 /**
  * Detect layout from image dimensions.
+ * dual  ~1.37 (851x621)  — two columns of 12 rows
+ * single ~2.11 (1041x493) — one column of 4 rows
+ *
+ * We use a conservative threshold of 1.7 so dual templates don't get
+ * misclassified when uploaded at unusual crop sizes.
  * @param {number} w
  * @param {number} h
  * @returns {'dual'|'single'}
  */
 function detectLayout(w, h) {
   const ratio = w / h;
-  // dual ~1.37, single ~2.11
-  return ratio > 1.8 ? 'single' : 'dual';
+  return ratio > 1.7 ? 'single' : 'dual';
 }
 
 /**
@@ -105,8 +116,8 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath) 
   const L = scaleObj(DUAL.L, sx);
   const R = scaleObj(DUAL.R, sx);
 
-  const BOLD   = `bold ${Math.round(DUAL.FONT_SIZE_BOLD   * sx)}px Sans`;
-  const NORMAL = `${Math.round(DUAL.FONT_SIZE_NORMAL * sx)}px Sans`;
+  const BOLD   = `bold ${Math.round(DUAL.FONT_SIZE_BOLD   * sx)}px Arial, sans-serif`;
+  const NORMAL = `${Math.round(DUAL.FONT_SIZE_NORMAL * sx)}px Arial, sans-serif`;
 
   const slotsPerSide = Math.ceil(teams.length / 2);
   const leftTeams    = teams.slice(0, slotsPerSide);
@@ -162,8 +173,8 @@ async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath
   const rowMids = SINGLE.ROW_MIDS.map(y => Math.round(y * sy));
   const C = scaleObj(SINGLE.C, sx);
 
-  const BOLD   = `bold ${Math.round(SINGLE.FONT_SIZE_BOLD   * sx)}px Sans`;
-  const NORMAL = `${Math.round(SINGLE.FONT_SIZE_NORMAL * sx)}px Sans`;
+  const BOLD   = `bold ${Math.round(SINGLE.FONT_SIZE_BOLD   * sx)}px Arial, sans-serif`;
+  const NORMAL = `${Math.round(SINGLE.FONT_SIZE_NORMAL * sx)}px Arial, sans-serif`;
 
   let logo = null;
   if (logoPath && fs.existsSync(logoPath)) {
