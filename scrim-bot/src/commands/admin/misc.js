@@ -42,11 +42,26 @@ async function postFreshLobbySlotList(guild, letter, lobbyConf, settings) {
   if (!lc?.channel_id) return;
   try {
     const ch     = await guild.channels.fetch(lc.channel_id);
-    const ids    = getPersistentSlotListId(guild.id);
+    const botId  = guild.client?.user?.id;
     const msgKey = `lobby_${letter}`;
-    if (ids[msgKey]) {
-      try { const old = await ch.messages.fetch(ids[msgKey]); await old.unpin().catch(() => {}); await old.delete().catch(() => {}); } catch {}
+
+    // Delete ALL bot slot list messages for this lobby (works even after restart with no stored IDs)
+    const msgs = await ch.messages.fetch({ limit: 50 });
+    const toDelete = msgs.filter(m =>
+      m.author.id === botId &&
+      m.embeds?.[0]?.title?.includes(`Lobby ${letter}`)
+    );
+    for (const [, m] of toDelete) {
+      try { await m.unpin().catch(() => {}); await m.delete(); } catch {}
     }
+
+    // Also nuke by stored ID in case it wasn't caught above
+    const ids = getPersistentSlotListId(guild.id);
+    if (ids[msgKey]) {
+      try { const old = await ch.messages.fetch(ids[msgKey]); await old.unpin().catch(() => {}); await old.delete(); } catch {}
+    }
+
+    // Post fresh empty slot list
     const embed = buildPersistentSlotList([], settings, letter);
     const msg   = await ch.send({ embeds: [embed] });
     try { await msg.pin(); } catch {}
