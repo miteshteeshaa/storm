@@ -13,7 +13,7 @@ module.exports = {
     .setName('register')
     .setDescription('Register your team for the scrim')
     .addStringOption(opt => opt.setName('team_name').setDescription('Full team name').setRequired(true))
-    .addStringOption(opt => opt.setName('team_tag').setDescription('Short tag e.g. ZRX').setRequired(true).setMaxLength(8))
+    .addStringOption(opt => opt.setName('team_tag').setDescription('Short tag e.g. ZRX').setRequired(true).setMaxLength(20))
     .addUserOption(opt => opt.setName('manager').setDescription('Team manager/captain').setRequired(true))
     .addUserOption(opt => opt.setName('player2').setDescription('Player 2').setRequired(false))
     .addUserOption(opt => opt.setName('player3').setDescription('Player 3').setRequired(false))
