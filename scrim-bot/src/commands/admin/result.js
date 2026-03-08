@@ -141,7 +141,7 @@ module.exports = {
 
       // Pull standings from sheet
       const lobbyFilter = lobbyValue === 'ALL' ? null : lobbyValue;
-      const standings = await getSheetStandings(spreadsheetId, settings.slots_per_lobby || 24, lobbyFilter);
+      const standings = await getSheetStandings(spreadsheetId, settings.slots_per_lobby || 24, lobbyFilter, settings.first_slot || 1);
 
       if (!standings || standings.length === 0) {
         return interaction.editReply({ embeds: [errorEmbed('No Data', 'No match data found in the Google Sheet yet.')] });
