@@ -426,7 +426,7 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
 
 // ------ Sync team names into the correct lobby tab(s) ------------------------------------------------------------------------------------
 // slots: full array from registrations --- grouped by lobby automatically
-async function syncTeamsToSheet(spreadsheetId, slots) {
+async function syncTeamsToSheet(spreadsheetId, slots, slotsPerLobby = 24) {
   if (!spreadsheetId || !slots || slots.length === 0) return;
 
   const auth   = getAuth();
@@ -450,7 +450,7 @@ async function syncTeamsToSheet(spreadsheetId, slots) {
     const sheetTitle = `Lobby ${letter}`;
     if (!tabSet.has(sheetTitle)) continue;
 
-    const maxSlot    = Math.max(24, ...teams.map(t => t.lobby_slot || 0));
+    const maxSlot    = Math.max(slotsPerLobby, ...teams.map(t => t.lobby_slot || 0));
     const nameValues = Array.from({ length: maxSlot }, () => ['']);
     const tagValues  = Array.from({ length: maxSlot }, () => ['']);
 
