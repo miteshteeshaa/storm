@@ -1,16 +1,12 @@
 const { SlashCommandBuilder } = require('discord.js');
 const {
-  getConfig, getRegistrations, setRegistrations, getScrimSettings
+  getConfig, getRegistrations, setRegistrations, getScrimSettings,
+  getSessions, getSessionConfig, getSessionServer, getSessionByChannel,
 } = require('../../utils/database');
 const { errorEmbed } = require('../../utils/embeds');
-const { isActivated, isRegistrationOpen, isAdmin } = require('../../utils/permissions');
+const { isActivated, isAdmin } = require('../../utils/permissions');
 const { syncTeamsToSheet } = require('../../utils/sheets');
-const { registerTeamCard, SLOT_EMOJI_LIST, LOBBY_EMOJI_IDS } = require('../../handlers/reactionHandler');
-
-// Send an ephemeral error — defer is already ephemeral so just editReply
-async function replyError(interaction, embed) {
-  return interaction.editReply({ embeds: [embed] });
-}
+const { registerTeamCard, LOBBY_EMOJI_IDS } = require('../../handlers/reactionHandler');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -26,27 +22,41 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      // Validate synchronously first — no async before reply
       if (!isActivated(interaction.guildId))
         return interaction.reply({ embeds: [errorEmbed('Bot Not Active', 'The scrim bot is not active.')], ephemeral: true });
 
-      const config     = getConfig(interaction.guildId);
-      const adminUser  = await isAdmin(interaction);
+      const config    = getConfig(interaction.guildId);
+      const adminUser = await isAdmin(interaction);
+      const sessions  = getSessions(interaction.guildId);
 
-      // ── Registration channel check (applies to everyone) ──────────────────
-      if (config.register_channel && interaction.channelId !== config.register_channel) {
+      // Resolve which session this channel belongs to
+      const sessionId = getSessionByChannel(interaction.guildId, interaction.channelId);
+
+      if (!sessionId) {
+        const regChannels = sessions
+          .map(s => getSessionConfig(interaction.guildId, s.id).register_channel)
+          .filter(Boolean)
+          .map(id => `<#${id}>`)
+          .join(', ');
+        const hint = regChannels
+          ? `Please use one of the registration channels: ${regChannels}`
+          : 'No registration channels have been configured yet. Ask an admin to set up sessions.';
+        return interaction.reply({ embeds: [errorEmbed('Wrong Channel', hint)], ephemeral: true });
+      }
+
+      // Registration open check — admins bypass
+      const sessionServer = getSessionServer(interaction.guildId, sessionId);
+      if (!sessionServer?.registration_open && !adminUser) {
+        const session = sessions.find(s => s.id === sessionId);
         return interaction.reply({
-          embeds: [errorEmbed('Wrong Channel', `Please use <#${config.register_channel}> to register.`)],
+          embeds: [errorEmbed('Registration Closed', `Registration for **${session?.name || sessionId}** is currently closed.`)],
           ephemeral: true,
         });
       }
 
-      // ── Registration open check (admins can bypass) ───────────────────────
-      if (!isRegistrationOpen(interaction.guildId) && !adminUser)
-        return interaction.reply({ embeds: [errorEmbed('Registration Closed', 'Wait for admin to open registration.')], ephemeral: true });
-
-      const settings = getScrimSettings(interaction.guildId);
-      const data     = getRegistrations(interaction.guildId);
+      const sessionCfg = getSessionConfig(interaction.guildId, sessionId);
+      const settings   = getScrimSettings(interaction.guildId, sessionId);
+      const data       = getRegistrations(interaction.guildId, sessionId);
 
       const teamName  = interaction.options.getString('team_name').trim().slice(0, 50);
       const teamTag   = interaction.options.getString('team_tag').toUpperCase().trim();
@@ -75,17 +85,16 @@ module.exports = {
 
       if (!isWaitlist) data.slots.push(team);
       else             data.waitlist.push(team);
-      setRegistrations(interaction.guildId, data);
+      setRegistrations(interaction.guildId, data, sessionId);
 
-      // ── Reply immediately — no thinking bubble ────────────────────────────
+      const session     = sessions.find(s => s.id === sessionId);
+      const sessionName = session?.name || sessionId;
       const confirmText = isWaitlist
-        ? `⏳ **[${teamTag}] ${teamName}** added to waitlist! (#${queueNum})`
-        : `✅ **[${teamTag}] ${teamName}** registered! (#${queueNum})`;
+        ? `⏳ **[${teamTag}] ${teamName}** added to waitlist for **${sessionName}**! (#${queueNum})`
+        : `✅ **[${teamTag}] ${teamName}** registered for **${sessionName}**! (#${queueNum})`;
       await interaction.reply({ content: confirmText });
 
-      // ── Everything below is background — won't delay the reply ───────────
-
-      // Roles
+      // Background: roles
       try {
         const member = interaction.member;
         if (config.registered_role) member.roles.add(config.registered_role).catch(() => {});
@@ -97,28 +106,26 @@ module.exports = {
         }
       } catch {}
 
-      // Sheet sync
-      if (config.spreadsheet_id) {
-        syncTeamsToSheet(config.spreadsheet_id, data.slots).catch(() => {});
+      // Background: sheet sync
+      if (sessionCfg.spreadsheet_id) {
+        syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots).catch(() => {});
       }
 
-      // Team card in slot-allocation channel
-      if (config.slotlist_channel && !isWaitlist) {
+      // Background: team card in slot-allocation channel
+      if (sessionCfg.slotlist_channel && !isWaitlist) {
         try {
-          const ch = await interaction.guild.channels.fetch(config.slotlist_channel);
+          const ch = await interaction.guild.channels.fetch(sessionCfg.slotlist_channel);
           if (ch) {
             const playerMentions = players.map(p => `<@${p.id}>`).join(' ');
             const teamIndex      = data.slots.length - 1;
+            const cardText       = `[${teamTag}] ${teamName} ${playerMentions}`;
+            const msg            = await ch.send({ content: cardText });
+            registerTeamCard(msg.id, interaction.guildId, teamIndex, sessionId);
 
-            // Plain text card — faster rendering, no embed needed
-            const cardText = `[${teamTag}] ${teamName} ${playerMentions}`;
-            const msg = await ch.send({ content: cardText });
-            registerTeamCard(msg.id, interaction.guildId, teamIndex);
-
-            // Add reactions in background — LOBBY ONLY, no slot emojis (bot auto-assigns slot)
             (async () => {
               const numLobbies = settings.lobbies || 4;
-              const ALPHA_NAMES = ['ALPHABET_A','ALPHABET_B','ALPHABET_C','ALPHABET_D','ALPHABET_E','ALPHABET_F','ALPHABET_G','ALPHABET_H','ALPHABET_I','ALPHABET_J'];
+              const ALPHA_NAMES = ['ALPHABET_A','ALPHABET_B','ALPHABET_C','ALPHABET_D','ALPHABET_E',
+                                   'ALPHABET_F','ALPHABET_G','ALPHABET_H','ALPHABET_I','ALPHABET_J'];
               for (let i = 0; i < numLobbies; i++) {
                 const name = ALPHA_NAMES[i];
                 const id   = LOBBY_EMOJI_IDS[name];
