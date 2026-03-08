@@ -77,13 +77,18 @@ function deleteSession(guildId, sessionId) {
 }
 
 // ── Resolve sessionId from a channel ID ──────────────────────────────────────
-// Looks through all sessions' register_channel and slotlist_channel to find which session owns the channel
+// Looks through all sessions' register_channel, slotlist_channel, and lobby channels to find which session owns the channel
 function getSessionByChannel(guildId, channelId) {
   const sessions = getSessions(guildId);
   for (const s of sessions) {
     const cfg = getSessionConfig(guildId, s.id);
     if (cfg.register_channel === channelId) return s.id;
     if (cfg.slotlist_channel === channelId) return s.id;
+    // Check all lobby channels
+    const lobbyConf = getLobbyConfig(guildId, s.id);
+    for (const letter of Object.keys(lobbyConf)) {
+      if (lobbyConf[letter]?.channel_id === channelId) return s.id;
+    }
   }
   return null;
 }
