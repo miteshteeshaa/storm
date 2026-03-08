@@ -2,17 +2,18 @@ const { EmbedBuilder } = require('discord.js');
 const { syncTeamsToSheet } = require('../utils/sheets');
 const {
   getConfig, getRegistrations, setRegistrations,
-  getScrimSettings, getLobbyConfig,
+  getScrimSettings, getLobbyConfig, getSessionConfig,
   getConfirmSessions: dbGetConfirmSessions, setConfirmSessions: dbSetConfirmSessions,
   getSlotListIds, setSlotListIds,
-  getTeamCards, setTeamCard,
+  getTeamCards, setTeamCard, getTeamCardSession,
 } = require('../utils/database');
 
 // ── Confirm sessions — persisted to disk ──────────────────────────────────────
-function registerConfirmSession(guildId, confirmMessageId, channelId, lobbyLetter) {
+// Sessions now carry a sessionId so the reaction handler knows which scrim session to update
+function registerConfirmSession(guildId, confirmMessageId, channelId, lobbyLetter, sessionId = null) {
   const existing = dbGetConfirmSessions(guildId);
-  const idx = existing.findIndex(s => s.channelId === channelId);
-  const session = { confirmMessageId, channelId, lobbyLetter };
+  const idx = existing.findIndex(s => s.channelId === channelId && s.sessionId === sessionId);
+  const session = { confirmMessageId, channelId, lobbyLetter, sessionId };
   if (idx >= 0) existing[idx] = session;
   else existing.push(session);
   dbSetConfirmSessions(guildId, existing);
@@ -21,17 +22,15 @@ function getConfirmSessions(guildId) { return dbGetConfirmSessions(guildId); }
 function getConfirmSession(guildId)  { return getConfirmSessions(guildId)[0] || null; }
 
 // ── Slot list message IDs — persisted to disk ─────────────────────────────────
-function getPersistentSlotListId(guildId)       { return getSlotListIds(guildId); }
-function setPersistentSlotListId(guildId, data) { setSlotListIds(guildId, data); }
+function getPersistentSlotListId(guildId, sessionId)       { return getSlotListIds(guildId, sessionId); }
+function setPersistentSlotListId(guildId, data, sessionId) { setSlotListIds(guildId, data, sessionId); }
 
 // ── Team card map — persisted to disk so restarts don't lose card→team mapping ─
-function registerTeamCard(messageId, guildId, teamIndex) {
-  setTeamCard(guildId, messageId, teamIndex);
+function registerTeamCard(messageId, guildId, teamIndex, sessionId = null) {
+  setTeamCard(guildId, messageId, teamIndex, sessionId);
 }
 function lookupTeamCard(messageId, guildId) {
-  const cards = getTeamCards(guildId);
-  if (cards[messageId] !== undefined) return { guildId, teamIndex: cards[messageId] };
-  return null;
+  return getTeamCardSession(guildId, messageId);
 }
 
 // ── Emoji maps ────────────────────────────────────────────────────────────────
@@ -265,9 +264,10 @@ async function handleReactionAdd(reaction, user) {
       return;
     }
 
-    const data      = getRegistrations(guild.id);
-    const settings  = getScrimSettings(guild.id);
-    const lobbyConf = getLobbyConfig(guild.id);
+    const sessionId = cardInfo.sessionId;
+    const data      = getRegistrations(guild.id, sessionId);
+    const settings  = getScrimSettings(guild.id, sessionId);
+    const lobbyConf = getLobbyConfig(guild.id, sessionId);
     const team      = data.slots[cardInfo.teamIndex];
     console.log(`[REACTION] teamIndex=${cardInfo.teamIndex} team=`, team?.team_name);
     if (!team) return;
@@ -321,14 +321,14 @@ async function handleReactionAdd(reaction, user) {
 
       // Save immediately
       data.slots[cardInfo.teamIndex] = team;
-      setRegistrations(guild.id, data);
+      setRegistrations(guild.id, data, sessionId);
 
       // Update card + slot list instantly (these are the visible changes)
       await Promise.all([
         updateTeamCardEmbed(message, team),
-        refreshAllSlotLists(guild, config, settings, lobbyConf, data, team.lobby),
+        refreshAllSlotLists(guild, config, settings, lobbyConf, data, team.lobby, sessionId),
         team.lobby && team.lobby_slot && lobbyConf[team.lobby]?.channel_id
-          ? postToLobbyChannel(guild, team, lobbyConf, settings, data)
+          ? postToLobbyChannel(guild, team, lobbyConf, settings, data, sessionId)
           : Promise.resolve(),
       ]);
 
@@ -373,7 +373,7 @@ async function handleReactionAdd(reaction, user) {
         } catch {}
 
         // Sheet sync
-        syncSheet(guild, config, data).catch(() => {});
+        syncSheet(guild, config, data, sessionId).catch(() => {});
       })();
       return;
     }
@@ -400,12 +400,12 @@ async function handleReactionAdd(reaction, user) {
       delete team.lobby;
       delete team.lobby_slot;
       data.slots[cardInfo.teamIndex] = team;
-      setRegistrations(guild.id, data);
+      setRegistrations(guild.id, data, sessionId);
 
       // Update embed + slotlist immediately
       await updateTeamCardEmbed(message, team);
-      await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-      await syncSheet(guild, config, data);
+      await refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId);
+      await syncSheet(guild, config, data, sessionId);
 
       // Restore lobby letter emojis
       try {
@@ -435,9 +435,10 @@ async function handleReactionAdd(reaction, user) {
   }
 
   const config    = getConfig(guild.id);
-  const settings  = getScrimSettings(guild.id);
-  const lobbyConf = getLobbyConfig(guild.id);
-  const data      = getRegistrations(guild.id);
+  const sessionId = session.sessionId || null;
+  const settings  = getScrimSettings(guild.id, sessionId);
+  const lobbyConf = getLobbyConfig(guild.id, sessionId);
+  const data      = getRegistrations(guild.id, sessionId);
 
   // Find ALL slots where this user is captain or manager in THIS lobby
   const teamIndices = data.slots.reduce((acc, t, idx) => {
@@ -474,10 +475,10 @@ async function handleReactionAdd(reaction, user) {
     data.slots[idx].confirmed = newConfirmed;
   }
 
-  setRegistrations(guild.id, data);
+  setRegistrations(guild.id, data, sessionId);
   // Update the persistent slot list in all lobby channels (underline/strikethrough)
-  await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-  await syncSheet(guild, config, data);
+  await refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId);
+  await syncSheet(guild, config, data, sessionId);
 }
 
 // ── Handle reaction remove ────────────────────────────────────────────────────
@@ -503,9 +504,10 @@ async function handleReactionRemove(reaction, user) {
                     (config.admin_role && member.roles.cache.has(config.admin_role));
     if (!isAdminUser) return;
 
-    const data      = getRegistrations(guild.id);
-    const settings  = getScrimSettings(guild.id);
-    const lobbyConf = getLobbyConfig(guild.id);
+    const sessionId = cardInfo.sessionId;
+    const data      = getRegistrations(guild.id, sessionId);
+    const settings  = getScrimSettings(guild.id, sessionId);
+    const lobbyConf = getLobbyConfig(guild.id, sessionId);
     const team      = data.slots[cardInfo.teamIndex];
     if (!team) return;
 
@@ -525,10 +527,10 @@ async function handleReactionRemove(reaction, user) {
       delete team.lobby_slot;
 
       data.slots[cardInfo.teamIndex] = team;
-      setRegistrations(guild.id, data);
+      setRegistrations(guild.id, data, sessionId);
       await updateTeamCardEmbed(message, team);
-      await refreshAllSlotLists(guild, config, settings, lobbyConf, data);
-      await syncSheet(guild, config, data);
+      await refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId);
+      await syncSheet(guild, config, data, sessionId);
 
       // Restore lobby letter emojis — remove ❌ then re-add all configured lobby letters
       try {
@@ -556,7 +558,7 @@ async function handleReactionRemove(reaction, user) {
 
 
 // ── Post/update lobby-specific slot list in lobby channel ─────────────────────
-async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
+async function postToLobbyChannel(guild, team, lobbyConf, settings, data, sessionId = null) {
   const lc = lobbyConf[team.lobby];
   if (!lc?.channel_id) return;
 
@@ -564,7 +566,7 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
     const ch    = await guild.channels.fetch(lc.channel_id);
     const embed = buildPersistentSlotList(data.slots, settings, team.lobby);
     const msgKey = `lobby_${team.lobby}`;
-    const ids    = getPersistentSlotListId(guild.id);
+    const ids    = getPersistentSlotListId(guild.id, sessionId);
 
     // 1. Try editing by stored message ID (fast path)
     if (ids[msgKey]) {
@@ -574,7 +576,7 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
         return;
       } catch {
         // Message deleted or inaccessible — clear stale ID and fall through
-        setPersistentSlotListId(guild.id, { [msgKey]: null });
+        setPersistentSlotListId(guild.id, { [msgKey]: null }, sessionId);
       }
     }
 
@@ -591,17 +593,20 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data) {
 
     // 3. Post fresh message (no pin — pin system messages break scan logic)
     const newMsg = await ch.send({ embeds: [embed] });
-    setPersistentSlotListId(guild.id, { [msgKey]: newMsg.id });
+    setPersistentSlotListId(guild.id, { [msgKey]: newMsg.id }, sessionId);
   } catch (err) {
     console.error(`⚠️ Lobby channel post error:`, err.message);
   }
 }
 
 // ── Sync to Google Sheet ──────────────────────────────────────────────────────
-async function syncSheet(guild, config, data) {
+async function syncSheet(guild, config, data, sessionId = null) {
   try {
-    if (config.spreadsheet_id) {
-      await syncTeamsToSheet(config.spreadsheet_id, data.slots || []);
+    const { getSessionConfig } = require('../utils/database');
+    const sessionCfg = sessionId ? getSessionConfig(guild.id, sessionId) : {};
+    const spreadsheetId = sessionCfg.spreadsheet_id || config.spreadsheet_id;
+    if (spreadsheetId) {
+      await syncTeamsToSheet(spreadsheetId, data.slots || []);
     }
   } catch (err) {
     console.error('Sheet sync error:', err.message);
@@ -609,8 +614,8 @@ async function syncSheet(guild, config, data) {
 }
 
 // ── Refresh all slot lists ────────────────────────────────────────────────────
-async function refreshAllSlotLists(guild, config, settings, lobbyConf, data, onlyLobby = null) {
-  const ids = getPersistentSlotListId(guild.id);
+async function refreshAllSlotLists(guild, config, settings, lobbyConf, data, onlyLobby = null, sessionId = null) {
+  const ids = getPersistentSlotListId(guild.id, sessionId);
   const botId = guild.client?.user?.id;
   const LOBBY_LETTERS = ['A','B','C','D','E','F','G','H','I','J']
     .slice(0, settings.lobbies || 4)
@@ -632,7 +637,7 @@ async function refreshAllSlotLists(guild, config, settings, lobbyConf, data, onl
           await msg.edit({ embeds: [embed] });
           return;
         } catch {
-          setPersistentSlotListId(guild.id, { [msgKey]: null });
+          setPersistentSlotListId(guild.id, { [msgKey]: null }, sessionId);
         }
       }
 
@@ -642,7 +647,7 @@ async function refreshAllSlotLists(guild, config, settings, lobbyConf, data, onl
         m.embeds?.[0]?.title?.includes(`Lobby ${letter}`)
       );
       if (existing) {
-        setPersistentSlotListId(guild.id, { [msgKey]: existing.id });
+        setPersistentSlotListId(guild.id, { [msgKey]: existing.id }, sessionId);
         await existing.edit({ embeds: [embed] });
       }
     } catch {}
