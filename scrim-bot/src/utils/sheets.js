@@ -669,8 +669,12 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
     range: `${title}!D3:D${2 + newSlotsPerLobby}`,
   });
   const existingRows = (res.data.values || []).filter(r => r[0] && r[0] !== '').length;
+  console.log(`[resizeLobbySheet] Lobby ${lobbyLetter}: existingRows=${existingRows}, newSlotsPerLobby=${newSlotsPerLobby}`);
 
-  if (existingRows >= newSlotsPerLobby) return; // nothing to add
+  if (existingRows >= newSlotsPerLobby) {
+    console.log(`[resizeLobbySheet] Lobby ${lobbyLetter}: nothing to add, skipping`);
+    return;
+  }
 
   const { totalPlaceCol, totalKillCol, grandTotalCol } = totalCols(numMatches);
   const tpL = colLetter(totalPlaceCol);
