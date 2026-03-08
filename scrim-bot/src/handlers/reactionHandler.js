@@ -667,10 +667,11 @@ async function postToLobbyChannel(guild, team, lobbyConf, settings, data, sessio
 // ── Sync to Google Sheet ──────────────────────────────────────────────────────
 async function syncSheet(guild, config, data, sessionId = null) {
   try {
-    const { getSessionConfig } = require('../utils/database');
-    const sessionCfg = sessionId ? getSessionConfig(guild.id, sessionId) : {};
+    const { getSessionConfig, getScrimSettings } = require('../utils/database');
+    const sessionCfg    = sessionId ? getSessionConfig(guild.id, sessionId) : {};
     const spreadsheetId = sessionCfg.spreadsheet_id || config.spreadsheet_id;
-    const slotsPerLobby = config.slots_per_lobby || 24;
+    const settings      = getScrimSettings(guild.id, sessionId);
+    const slotsPerLobby = settings.slots_per_lobby || 24;
     if (spreadsheetId) {
       await syncTeamsToSheet(spreadsheetId, data.slots || [], slotsPerLobby);
     }
