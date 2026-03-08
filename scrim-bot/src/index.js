@@ -128,9 +128,10 @@ async function autoSyncAllGuilds() {
     try {
       const cfg  = getConfig(guildId);
       if (!cfg.spreadsheet_id) continue;
-      const data = getRegistrations(guildId);
+      const data     = getRegistrations(guildId);
       if (!data.slots || data.slots.length === 0) continue;
-      await _syncSheet(cfg.spreadsheet_id, data.slots);
+      const settings = getScrimSettings(guildId);
+      await _syncSheet(cfg.spreadsheet_id, data.slots, settings.slots_per_lobby || 24);
       console.log(`🔄 Auto-synced sheet for guild ${guildId}`);
     } catch (err) {
       console.error(`⚠️ Auto-sync failed for guild ${guildId}:`, err.message);
