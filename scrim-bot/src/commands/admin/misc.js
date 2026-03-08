@@ -138,7 +138,13 @@ const sheetCmd = {
         const numLobbies    = settings.lobbies || 4;
         const lobbyLetters  = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
         for (const letter of lobbyLetters) {
-          await resizeLobbySheet(sessionCfg.spreadsheet_id, letter, slotsPerLobby).catch(() => {});
+          try {
+            console.log(`[/sheet] Resizing Lobby ${letter} to ${slotsPerLobby} slots...`);
+            await resizeLobbySheet(sessionCfg.spreadsheet_id, letter, slotsPerLobby);
+            console.log(`[/sheet] Lobby ${letter} resize done`);
+          } catch (resizeErr) {
+            console.error(`[/sheet] Resize error Lobby ${letter}:`, resizeErr.message);
+          }
         }
         await syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, slotsPerLobby);
         results.push(`**${s.name}** — synced **${assigned}** team(s) ✅`);
