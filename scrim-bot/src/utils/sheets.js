@@ -541,7 +541,7 @@ async function clearTeamsFromSheet(spreadsheetId, slotsPerLobby = 24, lobbyLette
 }
 
 // ------ Read standings from lobby tab(s) ---------------------------------------------------------------------------------------------------------------------------
-async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter = null) {
+async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter = null, firstSlot = 1) {
   const auth   = getAuth();
   const sheets = google.sheets({ version:'v4', auth });
 
@@ -568,7 +568,8 @@ async function getSheetStandings(spreadsheetId, slotsPerLobby = 24, lobbyLetter 
     }
 
     // Read all data columns starting from D
-    const fullRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!D3:ZZ${2 + slotsPerLobby}` });
+    const totalRows = (firstSlot - 1) + slotsPerLobby;
+    const fullRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${title}!D3:ZZ${2 + totalRows}` });
     const rows    = fullRes.data.values || [];
 
     for (const row of rows) {
