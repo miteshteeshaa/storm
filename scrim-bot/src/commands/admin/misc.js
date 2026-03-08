@@ -137,16 +137,17 @@ const sheetCmd = {
         const slotsPerLobby = settings.slots_per_lobby || 24;
         const numLobbies    = settings.lobbies || 4;
         const lobbyLetters  = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+        const firstSlot = settings.first_slot || 1;
         for (const letter of lobbyLetters) {
           try {
-            console.log(`[/sheet] Resizing Lobby ${letter} to ${slotsPerLobby} slots...`);
-            await resizeLobbySheet(sessionCfg.spreadsheet_id, letter, slotsPerLobby);
+            console.log(`[/sheet] Resizing Lobby ${letter} to ${slotsPerLobby} slots (firstSlot=${firstSlot})...`);
+            await resizeLobbySheet(sessionCfg.spreadsheet_id, letter, slotsPerLobby, 150, firstSlot);
             console.log(`[/sheet] Lobby ${letter} resize done`);
           } catch (resizeErr) {
             console.error(`[/sheet] Resize error Lobby ${letter}:`, resizeErr.message);
           }
         }
-        await syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, slotsPerLobby);
+        await syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, slotsPerLobby, firstSlot);
         results.push(`**${s.name}** — synced **${assigned}** team(s) ✅`);
       }
 
@@ -204,13 +205,14 @@ const linkCmd = {
           const slotsPerLobby = settings.slots_per_lobby || 24;
           const scrimName     = settings.scrim_name || s.name;
 
-          const { spreadsheetId, url } = await createServerSheet(scrimName, slotsPerLobby, lobbyLetters, 150);
+          const firstSlotCreate = settings.first_slot || 1;
+          const { spreadsheetId, url } = await createServerSheet(scrimName, slotsPerLobby, lobbyLetters, 150, firstSlotCreate);
           setSessionConfig(interaction.guildId, s.id, { spreadsheet_id: spreadsheetId, sheet_url: url });
 
           // Sync any existing registrations
           const data = getRegistrations(interaction.guildId, s.id);
           if (data.slots.length > 0) {
-            await syncTeamsToSheet(spreadsheetId, data.slots, slotsPerLobby).catch(() => {});
+            await syncTeamsToSheet(spreadsheetId, data.slots, slotsPerLobby, firstSlotCreate).catch(() => {});
           }
 
           // Update that field to show the real link
