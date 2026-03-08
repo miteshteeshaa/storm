@@ -672,8 +672,9 @@ async function syncSheet(guild, config, data, sessionId = null) {
     const spreadsheetId = sessionCfg.spreadsheet_id || config.spreadsheet_id;
     const settings      = getScrimSettings(guild.id, sessionId);
     const slotsPerLobby = settings.slots_per_lobby || 24;
+    const firstSlot     = settings.first_slot || 1;
     if (spreadsheetId) {
-      await syncTeamsToSheet(spreadsheetId, data.slots || [], slotsPerLobby);
+      await syncTeamsToSheet(spreadsheetId, data.slots || [], slotsPerLobby, firstSlot);
     }
   } catch (err) {
     console.error('Sheet sync error:', err.message);
