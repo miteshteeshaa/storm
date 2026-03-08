@@ -96,7 +96,7 @@ module.exports = {
 
     // Sync sheet in background
     if (config.spreadsheet_id) {
-      syncTeamsToSheet(config.spreadsheet_id, data.slots).catch(() => {});
+      syncTeamsToSheet(config.spreadsheet_id, data.slots, settings.slots_per_lobby || 24).catch(() => {});
     }
 
     await interaction.editReply({
