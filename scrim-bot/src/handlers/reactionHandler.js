@@ -8,6 +8,22 @@ const {
   getTeamCards, setTeamCard, getTeamCardSession,
 } = require('../utils/database');
 
+// ── Per-guild reaction lock — prevents duplicate slot assignment on rapid reacts ──
+const reactionLocks = new Map(); // guildId → Promise
+async function withLock(guildId, fn) {
+  const prev = reactionLocks.get(guildId) || Promise.resolve();
+  let resolve;
+  const next = new Promise(r => { resolve = r; });
+  reactionLocks.set(guildId, next);
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    resolve();
+    if (reactionLocks.get(guildId) === next) reactionLocks.delete(guildId);
+  }
+}
+
 // ── Confirm sessions — persisted to disk ──────────────────────────────────────
 // Sessions now carry a sessionId so the reaction handler knows which scrim session to update
 function registerConfirmSession(guildId, confirmMessageId, channelId, lobbyLetter, sessionId = null) {
@@ -268,6 +284,7 @@ async function handleReactionAdd(reaction, user) {
       return;
     }
 
+    await withLock(guild.id, async () => {
     const sessionId = cardInfo.sessionId;
     const data      = getRegistrations(guild.id, sessionId);
     const settings  = getScrimSettings(guild.id, sessionId);
@@ -427,6 +444,7 @@ async function handleReactionAdd(reaction, user) {
 
     // Any other unrecognised emoji — ignore silently
     return;
+    }); // end withLock
   }
 
   // ── TEAM confirming on /confirm message ───────────────────────────────────
