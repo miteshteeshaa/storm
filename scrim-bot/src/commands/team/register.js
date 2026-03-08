@@ -109,7 +109,7 @@ module.exports = {
 
       // Background: sheet sync
       if (sessionCfg.spreadsheet_id) {
-        syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, settings.slots_per_lobby || 24).catch(() => {});
+        syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, settings.slots_per_lobby || 24, settings.first_slot || 1).catch(() => {});
       }
 
       // Background: team card in slot-allocation channel — always post
