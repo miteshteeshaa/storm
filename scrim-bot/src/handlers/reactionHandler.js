@@ -670,8 +670,9 @@ async function syncSheet(guild, config, data, sessionId = null) {
     const { getSessionConfig } = require('../utils/database');
     const sessionCfg = sessionId ? getSessionConfig(guild.id, sessionId) : {};
     const spreadsheetId = sessionCfg.spreadsheet_id || config.spreadsheet_id;
+    const slotsPerLobby = config.slots_per_lobby || 24;
     if (spreadsheetId) {
-      await syncTeamsToSheet(spreadsheetId, data.slots || []);
+      await syncTeamsToSheet(spreadsheetId, data.slots || [], slotsPerLobby);
     }
   } catch (err) {
     console.error('Sheet sync error:', err.message);
