@@ -6,7 +6,7 @@ const {
 } = require('../../utils/database');
 const { successEmbed, errorEmbed, infoEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
-const { clearTeamsFromSheet, createServerSheet, syncTeamsToSheet } = require('../../utils/sheets');
+const { clearTeamsFromSheet, createServerSheet, syncTeamsToSheet, resizeLobbySheet } = require('../../utils/sheets');
 const {
   buildPersistentSlotList,
   getPersistentSlotListId,
@@ -130,11 +130,17 @@ const sheetCmd = {
       for (const s of sessions) {
         const sessionCfg = getSessionConfig(interaction.guildId, s.id);
         if (!sessionCfg.spreadsheet_id) { results.push(`**${s.name}** — no sheet linked`); continue; }
-        const data     = getRegistrations(interaction.guildId, s.id);
-        const assigned = data.slots.filter(t => t.lobby).length;
+        const data          = getRegistrations(interaction.guildId, s.id);
+        const assigned      = data.slots.filter(t => t.lobby).length;
         if (assigned === 0) { results.push(`**${s.name}** — no assigned teams to sync`); continue; }
-        const settings = getScrimSettings(interaction.guildId, s.id);
-        await syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, settings.slots_per_lobby || 24);
+        const settings      = getScrimSettings(interaction.guildId, s.id);
+        const slotsPerLobby = settings.slots_per_lobby || 24;
+        const numLobbies    = settings.lobbies || 4;
+        const lobbyLetters  = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+        for (const letter of lobbyLetters) {
+          await resizeLobbySheet(sessionCfg.spreadsheet_id, letter, slotsPerLobby).catch(() => {});
+        }
+        await syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, slotsPerLobby);
         results.push(`**${s.name}** — synced **${assigned}** team(s) ✅`);
       }
 
