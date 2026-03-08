@@ -77,8 +77,9 @@ function totalCols(numMatches) {
 }
 
 // ------ Build static value rows for a lobby tab ---------------------------------------------------------------------------------------------------------
-function buildValueRows(slotsPerLobby, numMatches) {
+function buildValueRows(slotsPerLobby, numMatches, firstSlot = 1) {
   const { totalPlaceCol, totalKillCol, grandTotalCol } = totalCols(numMatches);
+  const totalRows = (firstSlot - 1) + slotsPerLobby; // e.g. first=6, slots=20 → 25 rows
 
   // Row 1: main headers
   const matchHeaders = [];
@@ -95,13 +96,10 @@ function buildValueRows(slotsPerLobby, numMatches) {
   for (let m = 0; m < numMatches; m++) subHeaders.push('Place', 'Kills');
   const row2 = ['Position', 'Pts  |  1kill=1pt', '', '', '', '', ...subHeaders, '', '', ''];
 
-  // Data rows (slot 1 .. slotsPerLobby)
+  // Data rows (slot 1 .. totalRows) — slots before firstSlot are empty placeholder rows
   const rows = [row1, row2];
-  for (let s = 1; s <= slotsPerLobby; s++) {
+  for (let s = 1; s <= totalRows; s++) {
     const placePts = PLACEMENT_POINTS[s - 1] ?? 0;
-    // Col A = position NUMBER (so VLOOKUP matches numeric placement input)
-    // Col B = points value
-    // Col C = gap; Col D = slot; Col E,F = team data
     rows.push([s, placePts, '', s, '', '', ...new Array(numMatches * 2).fill('')]);
   }
   return rows;
@@ -374,7 +372,7 @@ async function protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, 
 }
 
 // ------ Create a new spreadsheet: one tab per lobby, numMatches match columns ---------------
-async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = ['A','B','C','D'], numMatches = 150) {
+async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = ['A','B','C','D'], numMatches = 150, firstSlot = 1) {
   const auth   = getAuth();
   const sheets = google.sheets({ version:'v4', auth });
   const drive  = google.drive({ version:'v3', auth });
@@ -404,7 +402,8 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
   for (let idx = 0; idx < lobbyLetters.length; idx++) {
     const sheetId    = sheetMeta[idx].properties.sheetId;
     const sheetTitle = sheetMeta[idx].properties.title;
-    const valueRows  = buildValueRows(slotsPerLobby, numMatches);
+    const totalRows  = (firstSlot - 1) + slotsPerLobby;
+    const valueRows  = buildValueRows(slotsPerLobby, numMatches, firstSlot);
 
     await sheets.spreadsheets.values.update({
       spreadsheetId,
@@ -413,9 +412,9 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
       requestBody: { values: valueRows },
     });
 
-    await formatLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
-    await writeLobbyFormulas(sheets, spreadsheetId, sheetTitle, slotsPerLobby, numMatches);
-    await protectLobbySheet(sheets, spreadsheetId, sheetId, slotsPerLobby, numMatches);
+    await formatLobbySheet(sheets, spreadsheetId, sheetId, totalRows, numMatches);
+    await writeLobbyFormulas(sheets, spreadsheetId, sheetTitle, totalRows, numMatches);
+    await protectLobbySheet(sheets, spreadsheetId, sheetId, totalRows, numMatches);
   }
 
   return {
@@ -426,7 +425,7 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
 
 // ------ Sync team names into the correct lobby tab(s) ------------------------------------------------------------------------------------
 // slots: full array from registrations --- grouped by lobby automatically
-async function syncTeamsToSheet(spreadsheetId, slots, slotsPerLobby = 24) {
+async function syncTeamsToSheet(spreadsheetId, slots, slotsPerLobby = 24, firstSlot = 1) {
   if (!spreadsheetId || !slots || slots.length === 0) return;
 
   const auth   = getAuth();
@@ -450,7 +449,8 @@ async function syncTeamsToSheet(spreadsheetId, slots, slotsPerLobby = 24) {
     const sheetTitle = `Lobby ${letter}`;
     if (!tabSet.has(sheetTitle)) continue;
 
-    const maxSlot    = Math.max(slotsPerLobby, ...teams.map(t => t.lobby_slot || 0));
+    const totalRows  = (firstSlot - 1) + slotsPerLobby;
+    const maxSlot    = Math.max(totalRows, ...teams.map(t => t.lobby_slot || 0));
     const nameValues = Array.from({ length: maxSlot }, () => ['']);
     const tagValues  = Array.from({ length: maxSlot }, () => ['']);
 
@@ -658,20 +658,22 @@ async function writeMatchResult(spreadsheetId, lobbyLetter, matchNumber, results
 
 // ------ Resize sheet when slots_per_lobby increases ---------------------------------------------------------------------------------------------
 // Only adds new rows --- never removes or overwrites existing data
-async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, numMatches = 150) {
+async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, numMatches = 150, firstSlot = 1) {
   const auth   = getAuth();
   const sheets = google.sheets({ version: 'v4', auth });
   const title  = `Lobby ${lobbyLetter}`;
 
+  const totalRows = (firstSlot - 1) + newSlotsPerLobby; // e.g. first=6, slots=20 → 25 rows
+
   // Read how many data rows currently exist (check col D for last slot number)
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${title}!D3:D${2 + newSlotsPerLobby}`,
+    range: `${title}!D3:D${2 + totalRows}`,
   });
   const existingRows = (res.data.values || []).filter(r => r[0] && r[0] !== '').length;
-  console.log(`[resizeLobbySheet] Lobby ${lobbyLetter}: existingRows=${existingRows}, newSlotsPerLobby=${newSlotsPerLobby}`);
+  console.log(`[resizeLobbySheet] Lobby ${lobbyLetter}: existingRows=${existingRows}, totalRows=${totalRows}`);
 
-  if (existingRows >= newSlotsPerLobby) {
+  if (existingRows >= totalRows) {
     console.log(`[resizeLobbySheet] Lobby ${lobbyLetter}: nothing to add, skipping`);
     return;
   }
@@ -680,12 +682,12 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   const tpL = colLetter(totalPlaceCol);
   const tkL = colLetter(totalKillCol);
   const gtL = colLetter(grandTotalCol);
-  const scoringRange = `$A$3:$B$${2 + newSlotsPerLobby}`;
+  const scoringRange = `$A$3:$B$${2 + totalRows}`;
 
   const valueData   = [];
   const formulaData = [];
 
-  for (let s = existingRows + 1; s <= newSlotsPerLobby; s++) {
+  for (let s = existingRows + 1; s <= totalRows; s++) {
     const row      = s + 2;
     const placePts = PLACEMENT_POINTS[s - 1] ?? 0;
 
@@ -733,7 +735,7 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   const { lastDataCol } = totalCols(numMatches);
   const fmt = [];
 
-  for (let s = existingRows; s < newSlotsPerLobby; s++) {
+  for (let s = existingRows; s < totalRows; s++) {
     const rowIdx = 2 + s;
     const bg = s % 2 === 0
       ? { red:0.95, green:0.96, blue:0.98 }
@@ -751,7 +753,7 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   // Scoring table A:B blue tint for new rows
   fmt.push({
     repeatCell: {
-      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+newSlotsPerLobby, startColumnIndex:0, endColumnIndex:2 },
+      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+totalRows, startColumnIndex:0, endColumnIndex:2 },
       cell: { userEnteredFormat: {
         backgroundColor: { red:0.78, green:0.87, blue:0.98 },
         horizontalAlignment:'CENTER', textFormat:{ fontSize:8 },
@@ -763,7 +765,7 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   // Slot/Team/Tag D:F center
   fmt.push({
     repeatCell: {
-      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+newSlotsPerLobby, startColumnIndex:3, endColumnIndex:6 },
+      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+totalRows, startColumnIndex:3, endColumnIndex:6 },
       cell: { userEnteredFormat: { horizontalAlignment:'CENTER', textFormat:{ fontSize:9 } } },
       fields: 'userEnteredFormat(horizontalAlignment,textFormat)',
     },
@@ -772,7 +774,7 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   // Match data cells center small
   fmt.push({
     repeatCell: {
-      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+newSlotsPerLobby, startColumnIndex:DATA_START_COL, endColumnIndex:totalPlaceCol },
+      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+totalRows, startColumnIndex:DATA_START_COL, endColumnIndex:totalPlaceCol },
       cell: { userEnteredFormat: { horizontalAlignment:'CENTER', textFormat:{ fontSize:8 } } },
       fields: 'userEnteredFormat(horizontalAlignment,textFormat)',
     },
@@ -781,7 +783,7 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   // Total columns yellow bold
   fmt.push({
     repeatCell: {
-      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+newSlotsPerLobby, startColumnIndex:totalPlaceCol, endColumnIndex:grandTotalCol+1 },
+      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+totalRows, startColumnIndex:totalPlaceCol, endColumnIndex:grandTotalCol+1 },
       cell: { userEnteredFormat: {
         backgroundColor: { red:1, green:0.95, blue:0.6 },
         horizontalAlignment:'CENTER', textFormat:{ bold:true, fontSize:9 },
@@ -793,7 +795,7 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   // Row height 20px for new rows
   fmt.push({
     updateDimensionProperties: {
-      range: { sheetId, dimension:'ROWS', startIndex:2+existingRows, endIndex:2+newSlotsPerLobby },
+      range: { sheetId, dimension:'ROWS', startIndex:2+existingRows, endIndex:2+totalRows },
       properties: { pixelSize:20 },
       fields: 'pixelSize',
     },
@@ -802,7 +804,7 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   // Borders for new rows
   fmt.push({
     updateBorders: {
-      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+newSlotsPerLobby, startColumnIndex:0, endColumnIndex:lastDataCol },
+      range: { sheetId, startRowIndex:2+existingRows, endRowIndex:2+totalRows, startColumnIndex:0, endColumnIndex:lastDataCol },
       innerHorizontal: { style:'SOLID',        color:{ red:0.65,green:0.65,blue:0.65 } },
       innerVertical:   { style:'SOLID',        color:{ red:0.65,green:0.65,blue:0.65 } },
       top:    { style:'SOLID_MEDIUM', color:{ red:0.1,green:0.1,blue:0.1 } },
