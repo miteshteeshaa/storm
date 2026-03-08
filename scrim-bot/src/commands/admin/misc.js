@@ -133,7 +133,8 @@ const sheetCmd = {
         const data     = getRegistrations(interaction.guildId, s.id);
         const assigned = data.slots.filter(t => t.lobby).length;
         if (assigned === 0) { results.push(`**${s.name}** — no assigned teams to sync`); continue; }
-        await syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots);
+        const settings = getScrimSettings(interaction.guildId, s.id);
+        await syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots, settings.slots_per_lobby || 24);
         results.push(`**${s.name}** — synced **${assigned}** team(s) ✅`);
       }
 
@@ -197,7 +198,7 @@ const linkCmd = {
           // Sync any existing registrations
           const data = getRegistrations(interaction.guildId, s.id);
           if (data.slots.length > 0) {
-            await syncTeamsToSheet(spreadsheetId, data.slots).catch(() => {});
+            await syncTeamsToSheet(spreadsheetId, data.slots, slotsPerLobby).catch(() => {});
           }
 
           // Update that field to show the real link
