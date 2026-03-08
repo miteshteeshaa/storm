@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
 const {
   getConfig, setConfig, getRegistrations, setRegistrations, clearRegistrations,
   setServer, clearMatches, getScrimSettings, getLobbyConfig,
@@ -219,53 +219,90 @@ const linkCmd = {
 const clearCmd = {
   data: new SlashCommandBuilder()
     .setName('clear')
-    .setDescription('Clear registrations and reset channels (Admin only)')
-    .addStringOption(opt =>
-      opt.setName('session').setDescription('Which session to clear').setRequired(true)
-    )
-    .addStringOption(opt =>
-      opt.setName('target').setDescription('What to clear').setRequired(true)
-        .addChoices(
-          { name: '🗑️ ALL — Clear everything (all lobbies, registration, slot allocation)', value: 'all' },
-          { name: '🏟️ Lobby A', value: 'A' }, { name: '🏟️ Lobby B', value: 'B' },
-          { name: '🏟️ Lobby C', value: 'C' }, { name: '🏟️ Lobby D', value: 'D' },
-          { name: '🏟️ Lobby E', value: 'E' }, { name: '🏟️ Lobby F', value: 'F' },
-          { name: '🏟️ Lobby G', value: 'G' }, { name: '🏟️ Lobby H', value: 'H' },
-          { name: '🏟️ Lobby I', value: 'I' }, { name: '🏟️ Lobby J', value: 'J' },
-        )
-    ),
+    .setDescription('Clear registrations and reset channels (Admin only)'),
 
   async execute(interaction) {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    const sessionOpt = interaction.options.getString('session');
-    const target     = interaction.options.getString('target');
-    const sessions   = getSessions(interaction.guildId);
-
-    // Resolve session
-    const sessionInfo = sessions.find(s => s.id === sessionOpt);
-    if (!sessionInfo) {
-      const list = sessions.map(s => `\`${s.id}\` (${s.name})`).join(', ');
-      return interaction.reply({ embeds: [errorEmbed('Invalid Session', `Session \`${sessionOpt}\` not found.\nAvailable: ${list || 'none'}`)], ephemeral: true });
+    const sessions = getSessions(interaction.guildId);
+    if (sessions.length === 0) {
+      return interaction.reply({ embeds: [errorEmbed('No Sessions', 'No sessions configured. Use `/config` to create sessions.')], ephemeral: true });
     }
-    const sessionId   = sessionInfo.id;
+
+    // ── Step 1: Pick session ──────────────────────────────────────────────
+    const sessionOptions = sessions.map((s, i) => ({
+      label: `${String.fromCharCode(65 + i)} — ${s.name}`,
+      value: s.id,
+    }));
+
+    const sessionMenu = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('clear_session_pick')
+        .setPlaceholder('Select a session to clear')
+        .addOptions(sessionOptions)
+    );
+
+    const msg = await interaction.reply({
+      content: '**Step 1 — Select a session:**',
+      components: [sessionMenu],
+      ephemeral: true,
+      fetchReply: true,
+    });
+
+    let sessionPick;
+    try {
+      sessionPick = await msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
+    } catch {
+      return interaction.editReply({ content: 'Timed out.', components: [] });
+    }
+
+    const sessionId   = sessionPick.values[0];
+    const sessionInfo = sessions.find(s => s.id === sessionId);
     const sessionName = sessionInfo.name;
 
+    // ── Step 2: Pick what to clear ────────────────────────────────────────
+    const settings     = getScrimSettings(interaction.guildId, sessionId);
+    const numLobbies   = settings.lobbies || 4;
+    const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+
+    const targetOptions = [
+      { label: '🗑️ ALL — Clear everything', value: 'all', description: 'All lobbies, registration, slot allocation' },
+      ...lobbyLetters.map(l => ({ label: `🏟️ Lobby ${l} only`, value: l })),
+    ];
+
+    const targetMenu = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('clear_target_pick')
+        .setPlaceholder(`What to clear in ${sessionName}?`)
+        .addOptions(targetOptions)
+    );
+
+    await sessionPick.update({
+      content: `**Step 2 — What to clear in ${sessionName}?**`,
+      components: [targetMenu],
+    });
+
+    let targetPick;
+    try {
+      targetPick = await msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
+    } catch {
+      return interaction.editReply({ content: 'Timed out.', components: [] });
+    }
+
+    const target = targetPick.values[0];
+    await targetPick.update({ content: `⏳ Clearing **${sessionName}**...`, components: [] });
+
+    // ── Load session data ─────────────────────────────────────────────────
     const config     = getConfig(interaction.guildId);
     const sessionCfg = getSessionConfig(interaction.guildId, sessionId);
-    const settings   = getScrimSettings(interaction.guildId, sessionId);
     const lobbyConf  = getLobbyConfig(interaction.guildId, sessionId);
     const data       = getRegistrations(interaction.guildId, sessionId);
 
-    await interaction.deferReply({ ephemeral: true });
-
-    // ── CLEAR ALL ─────────────────────────────────────────────────────────────
+    // ── CLEAR ALL ─────────────────────────────────────────────────────────
     if (target === 'all') {
-      const allTeams     = [...data.slots, ...data.waitlist];
-      const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, settings.lobbies || 4);
+      const allTeams = [...data.slots, ...data.waitlist];
 
-      // Strip roles from all players
       const roleIds = [config.slot_role, config.waitlist_role, config.registered_role].filter(Boolean);
       for (const l of lobbyLetters) if (lobbyConf[l]?.role_id) roleIds.push(lobbyConf[l].role_id);
       for (const team of allTeams) {
@@ -277,22 +314,18 @@ const clearCmd = {
         }
       }
 
-      // Clear session data
       clearRegistrations(interaction.guildId, sessionId);
       clearMatches(interaction.guildId, sessionId);
       setSessionServer(interaction.guildId, sessionId, { registration_open: false });
       setSlotListIds(interaction.guildId, {}, sessionId);
 
-      // Clear sheet data
       if (sessionCfg.spreadsheet_id) {
         try { await clearTeamsFromSheet(sessionCfg.spreadsheet_id, settings.slots_per_lobby || 24, null); } catch (e) { console.error('Sheet clear error:', e.message); }
       }
 
-      // Purge registration + slot allocation channels
       const regDeleted  = await purgeChannel(interaction.guild, sessionCfg.register_channel);
       const slotDeleted = await purgeChannel(interaction.guild, sessionCfg.slotlist_channel);
 
-      // Purge lobby channels and repost fresh empty slot lists
       for (const l of lobbyLetters) {
         if (lobbyConf[l]?.channel_id) await purgeChannel(interaction.guild, lobbyConf[l].channel_id);
       }
@@ -301,6 +334,7 @@ const clearCmd = {
       }
 
       return interaction.editReply({
+        content: null,
         embeds: [new EmbedBuilder()
           .setColor(0x00FF7F).setTitle(`🗑️ CLEARED — ${sessionName} — ALL`)
           .setDescription(
@@ -313,9 +347,10 @@ const clearCmd = {
             `Run \`/open\` from the registration channel to start a new registration.`
           ).setTimestamp()
         ],
+        components: [],
       });
 
-    // ── CLEAR SPECIFIC LOBBY ──────────────────────────────────────────────────
+    // ── CLEAR SPECIFIC LOBBY ──────────────────────────────────────────────
     } else {
       const letter  = target;
       const lc      = lobbyConf[letter];
@@ -323,7 +358,6 @@ const clearCmd = {
       data.slots    = data.slots.filter(t => t.lobby !== letter);
       setRegistrations(interaction.guildId, data, sessionId);
 
-      // Strip lobby role
       if (lc?.role_id) {
         for (const team of removed) {
           for (const pid of [...new Set([team.captain_id, ...(team.players || [])])]) {
@@ -332,7 +366,6 @@ const clearCmd = {
         }
       }
 
-      // Clear sheet lobby tab
       if (sessionCfg.spreadsheet_id) {
         try { await clearTeamsFromSheet(sessionCfg.spreadsheet_id, settings.slots_per_lobby || 24, [letter]); } catch (e) { console.error('Sheet clear error:', e.message); }
       }
@@ -342,6 +375,7 @@ const clearCmd = {
       await postFreshLobbySlotList(interaction.guild, letter, lobbyConf, settings, sessionId);
 
       return interaction.editReply({
+        content: null,
         embeds: [new EmbedBuilder()
           .setColor(0xFFAA00).setTitle(`🏟️ CLEARED — ${sessionName} — LOBBY ${letter}`)
           .setDescription(
@@ -349,9 +383,10 @@ const clearCmd = {
             `🧹 Lobby channel: **${lobbyDeleted}** messages deleted\n` +
             `📋 Fresh slot list posted in Lobby ${letter} channel\n` +
             `🎭 Lobby ${letter} role stripped\n` +
-            `📊 Sheet: Lobby ${letter} tab data cleared (link & other lobbies preserved)`
+            `📊 Sheet: Lobby ${letter} tab data cleared`
           ).setTimestamp()
         ],
+        components: [],
       });
     }
   },
