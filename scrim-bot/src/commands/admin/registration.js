@@ -1,15 +1,47 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { setServer, getConfig, getRegistrations, getScrimSettings, getLobbyConfig } = require('../../utils/database');
+const {
+  setSessionServer, getConfig, getSessionConfig, getRegistrations,
+  getScrimSettings, getLobbyConfig, getSessions,
+} = require('../../utils/database');
 const { errorEmbed, successEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 const { registerConfirmSession } = require('../../handlers/reactionHandler');
 const { applyRegistrationChannelPerms } = require('./config');
+
+// ── Session picker helper — returns { sessionId, sessionName } or replies with error ──
+async function pickSession(interaction, allowedStates) {
+  const sessions = getSessions(interaction.guildId);
+  if (sessions.length === 0) {
+    await interaction.reply({ embeds: [errorEmbed('No Sessions', 'No sessions configured. Use `/config` to create sessions.')], ephemeral: true });
+    return null;
+  }
+  // If only one session, auto-select it
+  if (sessions.length === 1) return { sessionId: sessions[0].id, sessionName: sessions[0].name };
+
+  // Multiple sessions — add a session option to the command if not already specified
+  const sessionOpt = interaction.options.getString('session');
+  if (sessionOpt) {
+    const found = sessions.find(s => s.id === sessionOpt);
+    if (!found) {
+      await interaction.reply({ embeds: [errorEmbed('Invalid Session', `Session \`${sessionOpt}\` not found.`)], ephemeral: true });
+      return null;
+    }
+    return { sessionId: found.id, sessionName: found.name };
+  }
+  // Shouldn't reach here if command has session option
+  return { sessionId: sessions[0].id, sessionName: sessions[0].name };
+}
+
+function sessionOption(opt) {
+  return opt.setName('session').setDescription('Which session to target').setRequired(false);
+}
 
 // ── /open ─────────────────────────────────────────────────────────────────────
 const openCmd = {
   data: new SlashCommandBuilder()
     .setName('open')
     .setDescription('Open team registration (Admin only)')
+    .addStringOption(sessionOption)
     .addIntegerOption(opt =>
       opt.setName('slots').setDescription('Override max slots').setMinValue(1).setMaxValue(500)
     ),
@@ -17,20 +49,29 @@ const openCmd = {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    const config   = getConfig(interaction.guildId);
-    const settings = getScrimSettings(interaction.guildId);
-    const maxSlots = interaction.options.getInteger('slots') || settings.slots;
+    const picked = await pickSession(interaction);
+    if (!picked) return;
+    const { sessionId, sessionName } = picked;
 
-    setServer(interaction.guildId, { registration_open: true, max_slots: maxSlots, opened_at: new Date().toISOString() });
+    const config     = getConfig(interaction.guildId);
+    const sessionCfg = getSessionConfig(interaction.guildId, sessionId);
+    const settings   = getScrimSettings(interaction.guildId, sessionId);
+    const maxSlots   = interaction.options.getInteger('slots') || settings.slots;
 
-    // ── Open registration channel permissions ────────────────────────────
-    if (config.register_channel && config.registration_role) {
-      await applyRegistrationChannelPerms(interaction.guild, config.register_channel, config.registration_role, true);
+    setSessionServer(interaction.guildId, sessionId, {
+      registration_open: true,
+      max_slots: maxSlots,
+      opened_at: new Date().toISOString(),
+    });
+
+    // Open registration channel permissions
+    if (sessionCfg.register_channel && config.registration_role) {
+      await applyRegistrationChannelPerms(interaction.guild, sessionCfg.register_channel, config.registration_role, true);
     }
 
     const embed = new EmbedBuilder()
       .setColor(0x00FF7F)
-      .setTitle(`🎮 ${settings.scrim_name} — REGISTRATION OPEN!`)
+      .setTitle(`🎮 ${sessionName} — REGISTRATION OPEN!`)
       .setDescription('Use `/register` to register your team!')
       .addFields(
         { name: '📋 Total Slots', value: `\`${maxSlots}\``, inline: true },
@@ -40,14 +81,17 @@ const openCmd = {
       .setFooter({ text: 'First come, first served! Overflow goes to waitlist.' })
       .setTimestamp();
 
-    if (config.register_channel) {
+    if (sessionCfg.register_channel) {
       try {
-        const ch = await interaction.guild.channels.fetch(config.register_channel);
+        const ch = await interaction.guild.channels.fetch(sessionCfg.register_channel);
         if (ch) await ch.send({ embeds: [embed] });
       } catch {}
     }
 
-    await interaction.reply({ embeds: [successEmbed('Registration Opened', `Open with **${maxSlots}** slots across **${settings.lobbies}** lobbies!`)], ephemeral: true });
+    await interaction.reply({
+      embeds: [successEmbed('Registration Opened', `**${sessionName}** open with **${maxSlots}** slots across **${settings.lobbies}** lobbies!`)],
+      ephemeral: true,
+    });
   }
 };
 
@@ -55,29 +99,36 @@ const openCmd = {
 const closeCmd = {
   data: new SlashCommandBuilder()
     .setName('close')
-    .setDescription('Close registration (Admin only)'),
+    .setDescription('Close registration (Admin only)')
+    .addStringOption(sessionOption),
   async execute(interaction) {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    setServer(interaction.guildId, { registration_open: false });
-    const config = getConfig(interaction.guildId);
-    const data   = getRegistrations(interaction.guildId);
+    const picked = await pickSession(interaction);
+    if (!picked) return;
+    const { sessionId, sessionName } = picked;
 
-    // ── Close registration channel permissions ───────────────────────────
-    if (config.register_channel && config.registration_role) {
-      await applyRegistrationChannelPerms(interaction.guild, config.register_channel, config.registration_role, false);
+    const config     = getConfig(interaction.guildId);
+    const sessionCfg = getSessionConfig(interaction.guildId, sessionId);
+    const data       = getRegistrations(interaction.guildId, sessionId);
+
+    setSessionServer(interaction.guildId, sessionId, { registration_open: false });
+
+    // Close registration channel permissions
+    if (sessionCfg.register_channel && config.registration_role) {
+      await applyRegistrationChannelPerms(interaction.guild, sessionCfg.register_channel, config.registration_role, false);
     }
 
-    if (config.register_channel) {
+    if (sessionCfg.register_channel) {
       try {
-        const ch = await interaction.guild.channels.fetch(config.register_channel);
+        const ch = await interaction.guild.channels.fetch(sessionCfg.register_channel);
         if (ch) {
           await ch.send({
             embeds: [
               new EmbedBuilder()
                 .setColor(0xFF4444)
-                .setTitle('🔒 REGISTRATION CLOSED')
+                .setTitle(`🔒 ${sessionName} — REGISTRATION CLOSED`)
                 .setDescription('Registration is now closed.\n\nAdmin will post **CONFIRM YOUR SLOTS** soon.')
                 .setTimestamp()
             ]
@@ -87,7 +138,7 @@ const closeCmd = {
     }
 
     await interaction.reply({
-      embeds: [successEmbed('Registration Closed', `**${data.slots.length}** teams registered.\nRun \`/confirm\` when ready for slot confirmation.`)],
+      embeds: [successEmbed('Registration Closed', `**${sessionName}** closed. **${data.slots.length}** teams registered.\nRun \`/confirm\` when ready for slot confirmation.`)],
       ephemeral: true,
     });
   }
@@ -97,43 +148,48 @@ const closeCmd = {
 const confirmCmd = {
   data: new SlashCommandBuilder()
     .setName('confirm')
-    .setDescription('Post CONFIRM YOUR SLOTS in all lobby channels (Admin only)'),
+    .setDescription('Post CONFIRM YOUR SLOTS in all lobby channels (Admin only)')
+    .addStringOption(sessionOption),
   async execute(interaction) {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    const settings  = getScrimSettings(interaction.guildId);
-    const data      = getRegistrations(interaction.guildId);
-    const lobbyConf = getLobbyConfig(interaction.guildId);
+    const picked = await pickSession(interaction);
+    if (!picked) return;
+    const { sessionId, sessionName } = picked;
+
+    const settings  = getScrimSettings(interaction.guildId, sessionId);
+    const data      = getRegistrations(interaction.guildId, sessionId);
+    const lobbyConf = getLobbyConfig(interaction.guildId, sessionId);
 
     if (data.slots.length === 0) return interaction.reply({ embeds: [errorEmbed('No Teams', 'No registered teams.')], ephemeral: true });
 
     const LOBBY_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
-    const lobbyChanels = [];
+    const lobbyChannels = [];
     for (const letter of LOBBY_LETTERS.slice(0, settings.lobbies || 4)) {
       const chId = lobbyConf[letter]?.channel_id;
-      if (chId) lobbyChanels.push({ chId, letter });
+      if (chId) lobbyChannels.push({ chId, letter });
     }
 
-    if (lobbyChanels.length === 0) return interaction.reply({ embeds: [errorEmbed('No Lobby Channels', 'No lobby channels configured. Set them in `/config`.')], ephemeral: true });
+    if (lobbyChannels.length === 0) return interaction.reply({ embeds: [errorEmbed('No Lobby Channels', 'No lobby channels configured for this session.')], ephemeral: true });
 
     await interaction.deferReply({ ephemeral: true });
 
     const confirmEmbed = new EmbedBuilder()
       .setColor(0x5865F2)
-      .setTitle('✅ CONFIRM YOUR SLOTS')
+      .setTitle(`✅ ${sessionName} — CONFIRM YOUR SLOTS`)
       .setDescription(
         'React below to confirm or cancel your slot:\n\n' +
         '✅ — Confirms your slot (__underlined__ in list)\n' +
         '❌ — Cancels your slot (~~crossed out~~ in list)\n\n' +
         '*Only your registered manager/captain can react.*\n\u200b'
       )
-      .setFooter({ text: `${settings.scrim_name} | Slot confirmation` });
+      .setFooter({ text: `${sessionName} | Slot confirmation` });
 
     const posted = [];
     const errors = [];
 
-    for (const { chId, letter } of lobbyChanels) {
+    for (const { chId, letter } of lobbyChannels) {
       try {
         const ch = await interaction.guild.channels.fetch(chId);
         if (!ch) { errors.push(`<#${chId}> not found`); continue; }
@@ -142,10 +198,7 @@ const confirmCmd = {
         await confirmMsg.react('✅');
         await confirmMsg.react('❌');
 
-        // Register session: store message ID + lobby letter so reaction handler
-        // knows which lobby's slot list to update
-        registerConfirmSession(interaction.guildId, confirmMsg.id, chId, letter);
-
+        registerConfirmSession(interaction.guildId, confirmMsg.id, chId, letter, sessionId);
         posted.push(`<#${chId}>`);
       } catch (err) {
         console.error(`❌ /confirm error in channel ${chId}:`, err.message);
