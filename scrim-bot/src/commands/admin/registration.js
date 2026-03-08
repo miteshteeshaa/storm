@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
 const {
   setSessionServer, getConfig, getSessionConfig, getRegistrations,
   getScrimSettings, getLobbyConfig, getSessions, getSessionByChannel,
@@ -37,14 +37,15 @@ async function resolveSession(interaction) {
   // 3. Single session — auto-select
   if (sessions.length === 1) return { sessionId: sessions[0].id, sessionName: sessions[0].name };
 
-  // 4. Multiple sessions, no match — ask admin to run from the correct channel
-  const regChannels = sessions
-    .map(s => getSessionConfig(interaction.guildId, s.id).register_channel)
-    .filter(Boolean)
-    .map(id => `<#${id}>`)
-    .join(', ');
+  // 4. Multiple sessions, no match — tell admin which channels to use
+  const channelList = sessions.map(s => {
+    const cfg = getSessionConfig(interaction.guildId, s.id);
+    const ch  = cfg.slotlist_channel ? `<#${cfg.slotlist_channel}>` : cfg.register_channel ? `<#${cfg.register_channel}>` : null;
+    return ch ? `**${s.name}** → ${ch}` : null;
+  }).filter(Boolean).join('\n');
+
   await interaction.reply({
-    embeds: [errorEmbed('Run from Registration Channel', `Please run this command from the session's registration channel to auto-detect it.\nRegistration channels: ${regChannels || 'none configured'}`)],
+    embeds: [errorEmbed('Run from Session Channel', `Please run this command from the session's registration or slot allocation channel.\n\n${channelList || 'No channels configured — set them in `/config`.'}`)],
     ephemeral: true,
   });
   return null;
@@ -172,8 +173,6 @@ const confirmCmd = {
 
     await interaction.deferReply({ ephemeral: true });
 
-    const confirmText = `✅ — Confirms your slot | ❌ — Cancels your slot\n*Only your registered manager/captain can react.*`;
-
     const posted = [];
     const errors = [];
 
@@ -182,7 +181,13 @@ const confirmCmd = {
         const ch = await interaction.guild.channels.fetch(chId);
         if (!ch) { errors.push(`<#${chId}> not found`); continue; }
 
-        const confirmMsg = await ch.send({ content: confirmText });
+        const roleId      = lobbyConf[letter]?.role_id;
+        const roleMention = roleId ? `<@&${roleId}>` : `Lobby ${letter}`;
+        const confirmEmbed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setDescription(`PLS CONFIRM ${roleMention}\n*Team is __underlined__ if confirmed. Team is ~~crossed out~~ if cancelled.*`);
+
+        const confirmMsg = await ch.send({ embeds: [confirmEmbed] });
         await confirmMsg.react('✅');
         await confirmMsg.react('❌');
 
