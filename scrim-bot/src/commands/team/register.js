@@ -70,7 +70,7 @@ module.exports = {
       }
 
       const isWaitlist = data.slots.length >= settings.slots;
-      const queueNum   = isWaitlist ? data.waitlist.length + 1 : data.slots.length + 1;
+      const queueNum   = data.slots.length + 1;
 
       const team = {
         team_name:  teamName,
@@ -83,14 +83,15 @@ module.exports = {
         lobby_slot: null,
       };
 
-      if (!isWaitlist) data.slots.push(team);
-      else             data.waitlist.push(team);
+      // Always push to slots — admin assigns to lobby from slot allocation
+      // isWaitlist is only used for the confirmation message label
+      data.slots.push(team);
       setRegistrations(interaction.guildId, data, sessionId);
 
       const session     = sessions.find(s => s.id === sessionId);
       const sessionName = session?.name || sessionId;
       const confirmText = isWaitlist
-        ? `⏳ **[${teamTag}] ${teamName}** added to waitlist for **${sessionName}**! (#${queueNum})`
+        ? `⏳ **[${teamTag}] ${teamName}** added to waitlist for **${sessionName}**! (#${queueNum}) — Admin will assign your slot.`
         : `✅ **[${teamTag}] ${teamName}** registered for **${sessionName}**! (#${queueNum})`;
       await interaction.reply({ content: confirmText });
 
@@ -98,11 +99,11 @@ module.exports = {
       try {
         const member = interaction.member;
         if (config.registered_role) member.roles.add(config.registered_role).catch(() => {});
-        if (!isWaitlist) {
+        if (isWaitlist) {
+          if (config.waitlist_role) member.roles.add(config.waitlist_role).catch(() => {});
+        } else {
           if (config.slot_role)     member.roles.add(config.slot_role).catch(() => {});
           if (config.waitlist_role) member.roles.remove(config.waitlist_role).catch(() => {});
-        } else {
-          if (config.waitlist_role) member.roles.add(config.waitlist_role).catch(() => {});
         }
       } catch {}
 
@@ -111,8 +112,8 @@ module.exports = {
         syncTeamsToSheet(sessionCfg.spreadsheet_id, data.slots).catch(() => {});
       }
 
-      // Background: team card in slot-allocation channel
-      if (sessionCfg.slotlist_channel && !isWaitlist) {
+      // Background: team card in slot-allocation channel — always post
+      if (sessionCfg.slotlist_channel) {
         try {
           const ch = await interaction.guild.channels.fetch(sessionCfg.slotlist_channel);
           if (ch) {
