@@ -479,6 +479,35 @@ async function handleReactionAdd(reaction, user) {
   // Update the persistent slot list in all lobby channels (underline/strikethrough)
   await refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId);
   await syncSheet(guild, config, data, sessionId);
+
+  // ── DM the player if they confirmed or cancelled ──────────────────────────
+  if (newConfirmed === true || newConfirmed === false) {
+    try {
+      const { getSessions, getSessionConfig } = require('../utils/database');
+      const sessions    = getSessions(guild.id);
+      const sessionInfo = sessions.find(s => s.id === sessionId) || { name: settings.scrim_name };
+      const sessionCfg  = sessionId ? getSessionConfig(guild.id, sessionId) : {};
+
+      // Build one DM line per slot this player has in this lobby
+      const dmLines = teamIndices.map(idx => {
+        const t          = data.slots[idx];
+        const captain    = `<@${t.captain_id || t.manager_id}>`;
+        const lobbyChId  = lobbyConf[t.lobby]?.channel_id;
+        const lobbyChStr = lobbyChId ? `<#${lobbyChId}>` : `Lobby ${t.lobby}`;
+        const statusIcon = newConfirmed === true ? '✅' : '❌';
+
+        return [
+          `${statusIcon} __Participation in ${sessionInfo.name} successfully ${newConfirmed === true ? 'confirmed' : 'cancelled'}!__`,
+          `Team: \`[${t.team_tag}]\` ${t.team_name} ${captain}`,
+          `Lobby: 🏆 ${sessionInfo.name} › ${lobbyChStr}`,
+        ].join('\n');
+      });
+
+      const dmContent = dmLines.join('\n\n');
+      const dmUser = await guild.client.users.fetch(user.id).catch(() => null);
+      if (dmUser) await dmUser.send({ content: dmContent }).catch(() => {});
+    } catch {}
+  }
 }
 
 // ── Handle reaction remove ────────────────────────────────────────────────────
