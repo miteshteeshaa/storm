@@ -148,8 +148,9 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
       const team  = teams.find(t => t.lobby_slot === s);
       const emoji = numEmoji(s);
       if (team) {
-        const mgr  = `<@${team.manager_id || team.captain_id}>`;
-        const line = `${emoji} **[${team.team_tag}] ${team.team_name}** ${mgr}`;
+        const mentions = [...new Set([team.captain_id, team.manager_id].filter(Boolean))]
+          .map(id => `<@${id}>`).join(' ');
+        const line = `${emoji} **[${team.team_tag}] ${team.team_name}** ${mentions}`;
         if (team.confirmed === true)       allLines.push(`__${line}__`);
         else if (team.confirmed === false)  allLines.push(`~~${line}~~`);
         else                               allLines.push(line);
@@ -171,7 +172,10 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
   if (!lobbyFilter && unassigned.length > 0) {
     fields.push({
       name: '⏳ Unassigned',
-      value: unassigned.map(t => `• [${t.team_tag}] ${t.team_name} <@${t.manager_id || t.captain_id}>`).join('\n'),
+      value: unassigned.map(t => {
+        const mentions = [...new Set([t.captain_id, t.manager_id].filter(Boolean))].map(id => `<@${id}>`).join(' ');
+        return `• [${t.team_tag}] ${t.team_name} ${mentions}`;
+      }).join('\n'),
       inline: false,
     });
   }
@@ -210,11 +214,11 @@ function buildConfirmSlotList(slots, settings, lobbyFilter = null) {
     const teams = (lobbyGroups[letter] || []).sort((a, b) => a.lobby_slot - b.lobby_slot);
     if (teams.length === 0) continue;
     const lines = teams.map(t => {
-      const e   = numEmoji(t.lobby_slot);
-      const mgr = `<@${t.manager_id || t.captain_id}>`;
-      if (t.confirmed === true)  return `${e} __[${t.team_tag}] ${t.team_name}__ ${mgr}`;
-      if (t.confirmed === false) return `${e} ~~[${t.team_tag}] ${t.team_name}~~ ${mgr}`;
-      return `${e} [${t.team_tag}] ${t.team_name} ${mgr}`;
+      const e        = numEmoji(t.lobby_slot);
+      const mentions = [...new Set([t.captain_id, t.manager_id].filter(Boolean))].map(id => `<@${id}>`).join(' ');
+      if (t.confirmed === true)  return `${e} __[${t.team_tag}] ${t.team_name}__ ${mentions}`;
+      if (t.confirmed === false) return `${e} ~~[${t.team_tag}] ${t.team_name}~~ ${mentions}`;
+      return `${e} [${t.team_tag}] ${t.team_name} ${mentions}`;
     });
     fields.push({ name: `🏟️ Lobby ${letter}`, value: lines.join('\n'), inline: true });
   }
