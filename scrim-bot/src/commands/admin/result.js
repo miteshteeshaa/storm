@@ -172,7 +172,7 @@ module.exports = {
 
       const header = customMessage
         ? customMessage
-        : `**Results of ${settings.scrim_name}, ${lobbyLabel} on ${dateStr}**\nCongratulation to **${top3[0]?.team_name}** for 1st place!`;
+        : `__Results of ${settings.scrim_name}, ${lobbyLabel} on ${dateStr}__ Congratulation to **${top3[0]?.team_name}** for 1st place!`;
 
       await targetChannel.send({
         content: `${header}\n\n${top3Lines}`,
