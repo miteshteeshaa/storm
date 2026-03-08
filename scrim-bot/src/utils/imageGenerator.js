@@ -73,7 +73,7 @@ const SINGLE_FX = {
   LOGO_START_FX: 490/1041, LOGO_GAP_FX: 4/1041, LOGO_H_FY: 50/493,
 };
 
-const FONT_FILL = 0.52;
+const FONT_FILL = 0.40;
 
 // ── Layout detection ──────────────────────────────────────────────────────────
 function detectLayout(w, h) { return w / h > 1.7 ? 'single' : 'dual'; }
