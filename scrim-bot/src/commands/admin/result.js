@@ -6,7 +6,9 @@ const {
   ActionRowBuilder, ChannelSelectMenuBuilder, ChannelType,
   StringSelectMenuBuilder, ButtonBuilder, ButtonStyle,
 } = require('discord.js');
-const { getConfig, getScrimSettings } = require('../../utils/database');
+const {
+  getConfig, getScrimSettings, getSessions, getSessionConfig, getLobbyConfig,
+} = require('../../utils/database');
 const { errorEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
 const { generateResultsImage } = require('../../utils/imageGenerator');
@@ -38,27 +40,66 @@ module.exports = {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      const config   = getConfig(interaction.guildId);
-      const settings = getScrimSettings(interaction.guildId);
+      const config        = getConfig(interaction.guildId);
+      const sessions      = getSessions(interaction.guildId);
       const customMessage = interaction.options.getString('message') || null;
 
+      if (sessions.length === 0) {
+        return interaction.editReply({ embeds: [errorEmbed('No Sessions', 'No sessions configured.')] });
+      }
+
+      // ── Step 1: Pick session (skip if only one) ───────────────────────────
+      let sessionId, sessionName;
+      if (sessions.length === 1) {
+        sessionId   = sessions[0].id;
+        sessionName = sessions[0].name;
+      } else {
+        const sessionRow = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('results_session_pick')
+            .setPlaceholder('Which session?')
+            .addOptions(sessions.map((s, i) => ({
+              label: `${String.fromCharCode(65 + i)} — ${s.name}`,
+              value: s.id,
+            })))
+        );
+        await interaction.editReply({ content: '**Step 1 — Select a session:**', components: [sessionRow], embeds: [] });
+
+        let sessionPick;
+        try {
+          sessionPick = await interaction.fetchReply().then(msg =>
+            msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 })
+          );
+        } catch {
+          return interaction.editReply({ content: 'Timed out.', components: [] });
+        }
+
+        sessionId   = sessionPick.values[0];
+        sessionName = sessions.find(s => s.id === sessionId)?.name;
+        await sessionPick.deferUpdate();
+      }
+
+      const sessionCfg = getSessionConfig(interaction.guildId, sessionId);
+      const settings   = getScrimSettings(interaction.guildId, sessionId);
+
       // Check template exists
-      const templatePath = config.results_template_path;
+      const templatePath = sessionCfg.results_template_path || config.results_template_path;
       if (!templatePath || !fs.existsSync(templatePath)) {
         return interaction.editReply({
-          embeds: [errorEmbed('No Template', 'No results template uploaded. Use `/config` → "Results Template" to upload one.')],
+          embeds: [errorEmbed('No Template', 'No results template uploaded. Use `/config` → session → "Results Template" to upload one.')],
         });
       }
 
       // Check sheet configured
-      if (!config.spreadsheet_id) {
+      const spreadsheetId = sessionCfg.spreadsheet_id;
+      if (!spreadsheetId) {
         return interaction.editReply({
-          embeds: [errorEmbed('No Sheet', 'No Google Sheet linked. Run `/sheet` first.')],
+          embeds: [errorEmbed('No Sheet', `No Google Sheet linked for **${sessionName}**. Run \`/link\` first.`)],
         });
       }
 
-      // ── Step 1: Ask which lobby (or all) ─────────────────────────────────
-      const numLobbies  = settings.lobbies || 4;
+      // ── Step 2: Ask which lobby ───────────────────────────────────────────
+      const numLobbies   = settings.lobbies || 4;
       const lobbyLetters = ['A','B','C','D','E','F'].slice(0, numLobbies);
 
       const lobbyOptions = [
@@ -74,7 +115,7 @@ module.exports = {
       );
 
       await interaction.editReply({
-        content: '**Step 1 — Select a lobby:**',
+        content: `**${sessions.length > 1 ? 'Step 2' : 'Step 1'} — Select a lobby:**`,
         components: [lobbyRow],
         embeds: [],
       });
@@ -100,7 +141,7 @@ module.exports = {
 
       // Pull standings from sheet
       const lobbyFilter = lobbyValue === 'ALL' ? null : lobbyValue;
-      const standings = await getSheetStandings(config.spreadsheet_id, settings.slots_per_lobby || 24, lobbyFilter);
+      const standings = await getSheetStandings(spreadsheetId, settings.slots_per_lobby || 24, lobbyFilter);
 
       if (!standings || standings.length === 0) {
         return interaction.editReply({ embeds: [errorEmbed('No Data', 'No match data found in the Google Sheet yet.')] });
@@ -121,8 +162,8 @@ module.exports = {
       const imageBuffer = await generateResultsImage(
         templatePath,
         standings,
-        config.results_font_color   || '#FFFFFF',
-        config.results_accent_color || '#FFD700',
+        sessionCfg.results_font_color   || config.results_font_color   || '#FFFFFF',
+        sessionCfg.results_accent_color || config.results_accent_color || '#FFD700',
         logoPath
       );
 
