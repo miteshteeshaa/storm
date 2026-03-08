@@ -2,6 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   getConfig, setConfig, getRegistrations, setRegistrations, clearRegistrations,
   setServer, clearMatches, getScrimSettings, getLobbyConfig,
+  getSessions, getSessionConfig,
 } = require('../../utils/database');
 const { successEmbed, errorEmbed, infoEmbed } = require('../../utils/embeds');
 const { isAdmin, isActivated } = require('../../utils/permissions');
@@ -138,82 +139,78 @@ const sheetCmd = {
 };
 
 // ─── /link ────────────────────────────────────────────────────────────────────
-// Returns existing sheet link (permanent) or generates a new one if none exists.
-// Link can only be reset via /config → "Reset Sheet Link".
 const linkCmd = {
   data: new SlashCommandBuilder()
     .setName('link')
-    .setDescription('Get (or auto-generate) the Google Sheet for this scrim (Admin only)'),
+    .setDescription('Get (or auto-generate) Google Sheets for all sessions (Admin only)'),
   async execute(interaction) {
     if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
     if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
 
-    const config   = getConfig(interaction.guildId);
-    const settings = getScrimSettings(interaction.guildId);
-
-    // ── Sheet already exists → return permanent link ──────────────────────
-    if (config.spreadsheet_id && config.sheet_url) {
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle('📊 Scrim Google Sheet')
-            .setDescription(`[📋 Click here to open the sheet](${config.sheet_url})`)
-            .addFields(
-              { name: '📌 Note', value: 'This link is permanent. To generate a new sheet, reset the Sheet URL in `/config`.', inline: false }
-            )
-            .setTimestamp(),
-        ],
-        ephemeral: true,
-      });
-    }
-
-    // ── No sheet yet → auto-generate one ─────────────────────────────────
     await interaction.deferReply({ ephemeral: true });
 
-    try {
-      const numLobbies    = settings.lobbies || 4;
-      const lobbyLetters  = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
-      const slotsPerLobby = settings.slots_per_lobby || 24;
-      const scrimName     = settings.scrim_name || 'SCRIM';
+    const sessions = getSessions(interaction.guildId);
+    if (sessions.length === 0) {
+      return interaction.editReply({ embeds: [errorEmbed('No Sessions', 'No sessions configured. Use `/config` to create sessions first.')] });
+    }
 
-      await interaction.editReply({
-        embeds: [infoEmbed('⏳ Generating Sheet…',
-          `Creating sheet for **${scrimName}** with **${numLobbies}** lobby tab(s) and **150 matches** each.\nThis may take up to a minute…`)],
-      });
+    const fields = [];
+    const toCreate = []; // sessions that need a new sheet
 
-      const { spreadsheetId, url } = await createServerSheet(scrimName, slotsPerLobby, lobbyLetters, 150);
+    for (const s of sessions) {
+      const sessionCfg = getSessionConfig(interaction.guildId, s.id);
+      if (sessionCfg.spreadsheet_id && sessionCfg.sheet_url) {
+        fields.push({ name: `📋 ${s.name}`, value: `[Open Sheet](${sessionCfg.sheet_url})`, inline: true });
+      } else {
+        toCreate.push(s);
+        fields.push({ name: `📋 ${s.name}`, value: '⏳ Generating…', inline: true });
+      }
+    }
 
-      // Save permanently — will NOT be overwritten by /link again
-      setConfig(interaction.guildId, { spreadsheet_id: spreadsheetId, sheet_url: url });
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('📊 Session Google Sheets').addFields(...fields).setTimestamp()],
+    });
 
-      // Sync any teams already registered
-      const data = getRegistrations(interaction.guildId);
-      if (data.slots.length > 0) {
-        await syncTeamsToSheet(spreadsheetId, data.slots).catch(() => {});
+    // Generate sheets for sessions that don't have one yet
+    if (toCreate.length > 0) {
+      const { setSessionConfig } = require('../../utils/database');
+      for (const s of toCreate) {
+        try {
+          const settings      = getScrimSettings(interaction.guildId, s.id);
+          const numLobbies    = settings.lobbies || 4;
+          const lobbyLetters  = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+          const slotsPerLobby = settings.slots_per_lobby || 24;
+          const scrimName     = settings.scrim_name || s.name;
+
+          const { spreadsheetId, url } = await createServerSheet(scrimName, slotsPerLobby, lobbyLetters, 150);
+          setSessionConfig(interaction.guildId, s.id, { spreadsheet_id: spreadsheetId, sheet_url: url });
+
+          // Sync any existing registrations
+          const data = getRegistrations(interaction.guildId, s.id);
+          if (data.slots.length > 0) {
+            await syncTeamsToSheet(spreadsheetId, data.slots).catch(() => {});
+          }
+
+          // Update that field to show the real link
+          const idx = fields.findIndex(f => f.name === `📋 ${s.name}`);
+          if (idx >= 0) fields[idx].value = `[Open Sheet](${url})`;
+        } catch (err) {
+          console.error(`❌ /link sheet generation error for session ${s.id}:`, err);
+          const idx = fields.findIndex(f => f.name === `📋 ${s.name}`);
+          if (idx >= 0) fields[idx].value = `❌ Failed: ${err.message}`;
+        }
       }
 
-      return interaction.editReply({
+      // Final update with all links resolved
+      await interaction.editReply({
         embeds: [
           new EmbedBuilder()
             .setColor(0x00C851)
-            .setTitle('✅ Google Sheet Created!')
-            .setDescription(`[📋 Click here to open](${url})`)
-            .addFields(
-              { name: '🏟️ Lobby Tabs',         value: lobbyLetters.map(l => `Lobby ${l}`).join(', '), inline: true },
-              { name: '🎮 Matches per Lobby',   value: '150',                                         inline: true },
-              { name: '👥 Slots per Lobby',     value: String(slotsPerLobby),                         inline: true },
-              { name: '📌 Permanent Link',      value: 'Use `/link` any time to get this URL again.\nTo reset, go to `/config` → Reset Sheet Link.', inline: false },
-            )
-            .setFooter({ text: 'Teams sync automatically every 20 min, or use /sheet to sync now.' })
+            .setTitle('📊 Session Google Sheets')
+            .addFields(...fields)
+            .setFooter({ text: 'Links are permanent. Reset via /config → Reset Sheet Link.' })
             .setTimestamp(),
         ],
-      });
-    } catch (err) {
-      console.error('❌ /link sheet generation error:', err);
-      return interaction.editReply({
-        embeds: [errorEmbed('Sheet Generation Failed',
-          `Could not create sheet: ${err.message}\n\nCheck that \`GOOGLE_SERVICE_EMAIL\` and \`GOOGLE_PRIVATE_KEY\` env vars are set.`)],
       });
     }
   },
