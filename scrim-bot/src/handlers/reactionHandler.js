@@ -175,13 +175,27 @@ function buildPersistentSlotList(slots, settings, lobbyFilter = null) {
       }
     }
 
-    // Split into two columns of 12 to stay under Discord's 1024 char field limit
-    const half = Math.ceil(allLines.length / 2);
-    const col1 = allLines.slice(0, half).join('\n') || '—';
-    const col2 = allLines.slice(half).join('\n') || '—';
-    fields.push({ name: `🏟️ Lobby ${letter}`, value: col1, inline: true });
-    fields.push({ name: '\u200b', value: col2, inline: true });
-    fields.push({ name: '\u200b', value: '\u200b', inline: true }); // spacer
+    // Single column — chunk into ≤1024-char fields to stay under Discord limit
+    const chunks = [];
+    let current  = '';
+    for (const line of allLines) {
+      const next = current ? current + '\n' + line : line;
+      if (next.length > 1024) {
+        chunks.push(current);
+        current = line;
+      } else {
+        current = next;
+      }
+    }
+    if (current) chunks.push(current);
+
+    chunks.forEach((chunk, i) => {
+      fields.push({
+        name: i === 0 ? `🏟️ Lobby ${letter}` : '\u200b',
+        value: chunk,
+        inline: false,
+      });
+    });
   }
 
   const unassigned = slots.filter(t => !t.lobby);
@@ -723,9 +737,63 @@ async function updateTeamCardEmbed(message, team) {
   } catch {}
 }
 
+// ── Handle slot list message deletion — auto-repost ──────────────────────────
+async function handleMessageDelete(message) {
+  if (!message.guild) return;
+  const guild   = message.guild;
+  const guildId = guild.id;
+
+  const { getSessions, getSessionConfig, getRegistrations, getScrimSettings, getLobbyConfig } = require('../utils/database');
+  const sessions = getSessions(guildId);
+
+  for (const s of sessions) {
+    const sessionCfg = getSessionConfig(guildId, s.id);
+    const settings   = getScrimSettings(guildId, s.id);
+    const lobbyConf  = getLobbyConfig(guildId, s.id);
+    const data       = getRegistrations(guildId, s.id);
+    const config     = getConfig(guildId);
+
+    // Check if it was the slot-allocation channel persistent list
+    if (sessionCfg.slotlist_channel === message.channelId) {
+      const ids    = getSlotListIds(guildId, s.id);
+      const stored = ids['slotlist_main'];
+      if (stored === message.id) {
+        // Repost fresh
+        try {
+          const ch    = await guild.channels.fetch(sessionCfg.slotlist_channel);
+          const embed = buildPersistentSlotList(data.slots, settings);
+          const msg   = await ch.send({ embeds: [embed] });
+          setSlotListIds(guildId, { slotlist_main: msg.id }, s.id);
+        } catch (err) { console.error('Auto-repost slotlist error:', err.message); }
+        return;
+      }
+    }
+
+    // Check if it was a lobby slot list
+    const numLobbies   = settings.lobbies || 4;
+    const lobbyLetters = ['A','B','C','D','E','F','G','H','I','J'].slice(0, numLobbies);
+    for (const letter of lobbyLetters) {
+      const chId = lobbyConf[letter]?.channel_id;
+      if (!chId || chId !== message.channelId) continue;
+      const ids    = getSlotListIds(guildId, s.id);
+      const stored = ids[`lobby_${letter}`];
+      if (stored === message.id) {
+        try {
+          const ch    = await guild.channels.fetch(chId);
+          const embed = buildPersistentSlotList(data.slots, settings, letter);
+          const msg   = await ch.send({ embeds: [embed] });
+          setSlotListIds(guildId, { [`lobby_${letter}`]: msg.id }, s.id);
+        } catch (err) { console.error(`Auto-repost lobby ${letter} error:`, err.message); }
+        return;
+      }
+    }
+  }
+}
+
 module.exports = {
   handleReactionAdd,
   handleReactionRemove,
+  handleMessageDelete,
   registerConfirmSession,
   getConfirmSession,
   getConfirmSessions,
