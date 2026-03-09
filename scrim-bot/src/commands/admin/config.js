@@ -168,7 +168,7 @@ function buildSessionMenu(sessionId) {
         { label: 'Match Results Channel',   value: 'match_channel',     description: 'Where admins upload match screenshots' },
         { label: 'Set Lobby Channels',    value: 'lobby_channels',     description: 'Set private channels per lobby' },
         { label: 'Set Lobby Roles',       value: 'lobby_roles',        description: 'Set access roles per lobby' },
-        { label: 'Google Sheet URL',      value: 'sheet_url',          description: 'Link to this session's sheet' },
+        { label: 'Google Sheet URL',      value: 'sheet_url',          description: 'Link to this session\'s sheet' },
         { label: '🔄 Reset Sheet Link',   value: 'reset_sheet',        description: 'Unlink sheet so /link generates a new one' },
         { label: 'Results Template',      value: 'results_template',   description: 'Background image for /results' },
         { label: 'Results Font Colour',   value: 'results_font_color', description: 'Text colour for /results overlay' },
