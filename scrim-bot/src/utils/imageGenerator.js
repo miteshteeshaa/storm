@@ -173,7 +173,7 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath, 
     if (i < leftTeams.length) {
       const t = leftTeams[i];
       drawText(ctx, t.rank,          L.rank,  y, NORMAL, accentColor, 'center');
-      drawFitText(ctx, t.team_name,  L.name,  y, fontSize, fontColor, nameMaxW_L);
+      drawFitText(ctx, cleanTeamName(t.team_name),  L.name,  y, fontSize, fontColor, nameMaxW_L);
       drawText(ctx, t.placement_pts, L.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      L.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         L.total, y, NORMAL, accentColor, 'center');
@@ -185,7 +185,7 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath, 
     if (i < rightTeams.length) {
       const t = rightTeams[i];
       drawText(ctx, t.rank,          R.rank,  y, NORMAL, accentColor, 'center');
-      drawFitText(ctx, t.team_name,  R.name,  y, fontSize, fontColor, nameMaxW_R);
+      drawFitText(ctx, cleanTeamName(t.team_name),  R.name,  y, fontSize, fontColor, nameMaxW_R);
       drawText(ctx, t.placement_pts, R.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      R.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         R.total, y, NORMAL, accentColor, 'center');
@@ -217,7 +217,7 @@ async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath
     const t = teams[i];
     const y = rowMids[i];
     drawText(ctx, t.rank,          C.rank,  y, NORMAL, accentColor, 'center');
-    drawText(ctx, t.team_name,     C.name,  y, NORMAL, fontColor,   'left');
+    drawText(ctx, cleanTeamName(t.team_name),     C.name,  y, NORMAL, fontColor,   'left');
     drawText(ctx, t.placement_pts, C.place, y, NORMAL, fontColor,   'center');
     drawText(ctx, t.kill_pts,      C.kills, y, NORMAL, fontColor,   'center');
     drawText(ctx, t.total,         C.total, y, NORMAL, accentColor, 'center');
@@ -228,6 +228,15 @@ async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Draw text shrinking font size until it fits within maxW
+function cleanTeamName(name) {
+  return String(name)
+    .replace(/<@!?\d+>/g, '')   // remove user mentions
+    .replace(/<@&\d+>/g, '')    // remove role mentions
+    .replace(/<#\d+>/g, '')     // remove channel mentions
+    .replace(/\s+/g, ' ')       // collapse extra spaces
+    .trim();
+}
+
 function drawFitText(ctx, text, x, y, baseFontSize, color, maxW) {
   let size = baseFontSize;
   const minSize = Math.max(7, Math.round(baseFontSize * 0.6));
