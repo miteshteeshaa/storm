@@ -193,73 +193,84 @@ function downloadImage(urlStr) {
 function parseOCRText(rawText) {
   // Normalize common OCR misreads
   const normalized = rawText
-    .replace(/\bO\b(?=\s+eliminations?)/gi, '0')        // capital O → 0
-    .replace(/\bI\b(?=\s+eliminations?)/g,  '1')        // capital I → 1
-    .replace(/\bDel?i?m?i?nations?\b/gi, '0 eliminations') // "Deliminations" → "0 eliminations"
-    .replace(/\b(\d)\s*elim\b/gi, '$1 eliminations');   // "3elim" → "3 eliminations"
+    .replace(/\bO\b(?=\s+eliminations?)/gi, '0')
+    .replace(/\bI\b(?=\s+eliminations?)/g,  '1')
+    .replace(/\bDel?i?m?i?nations?\b/gi, '0 eliminations')
+    .replace(/\b(\d)\s*elim\b/gi, '$1 eliminations');
 
   const lines = normalized
     .split('\n')
     .map(l => l.trim())
     .filter(Boolean);
 
-  const teams = [];
-  let current     = null;
-  let pendingName = null;
+  const teams  = [];
+  let current  = null;
 
   const elimRe      = /^(.+?)\s+(\d+)\s+eliminations?$/i;
   const killsOnlyRe = /^(\d+)\s+eliminations?$/i;
   const placeRe     = /^(\d{1,2})$/;
-  // Lines that are pure UI noise — skip and DON'T reset pendingName
-  const noiseRe     = /^(PUBG|MOBILE|Continue|\d+\s*R$|3\s*R$|DMX\s*\|)/i;
-  // Lines that should reset pendingName
+  const noiseRe     = /^(PUBG|MOBILE|Continue)$/i;
   const junkRe      = /^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i;
 
+  // Helper: flush current team — zip names + kills even if counts differ
+  function flushTeam() {
+    if (!current) return;
+    const { placement, names, kills } = current;
+    const players = [];
+    const count = Math.max(names.length, kills.length);
+    for (let i = 0; i < count; i++) {
+      const name = names[i];
+      const k    = kills[i] ?? 0;
+      if (name && name.length >= 2 && !junkRe.test(name)) {
+        players.push({ name, kills: k });
+      }
+    }
+    if (players.length > 0) teams.push({ placement, players });
+  }
+
   for (const line of lines) {
-    // Placement number
+    if (noiseRe.test(line)) continue;
+
+    // Placement number → start new team
     const placeMatch = placeRe.exec(line);
     if (placeMatch) {
       const p = parseInt(placeMatch[1]);
       if (p >= 1 && p <= 25) {
-        if (current) teams.push(current);
-        current     = { placement: p, players: [] };
-        pendingName = null;
+        flushTeam();
+        current = { placement: p, names: [], kills: [] };
         continue;
       }
     }
 
+    if (!current) continue;
+
     // Full "name N eliminations" on one line
     const elimMatch = elimRe.exec(line);
-    if (elimMatch && current) {
+    if (elimMatch) {
       const playerName = elimMatch[1].trim();
-      const kills      = parseInt(elimMatch[2]);
-      if (playerName.length >= 2 && !junkRe.test(playerName)) {
-        current.players.push({ name: playerName, kills });
-        pendingName = null;
+      if (!junkRe.test(playerName) && playerName.length >= 2) {
+        current.names.push(playerName);
+        current.kills.push(parseInt(elimMatch[2]));
       }
       continue;
     }
 
-    // Kills-only line following a pending name (split line case)
+    // Kills-only line
     const killsOnly = killsOnlyRe.exec(line);
-    if (killsOnly && current && pendingName) {
-      current.players.push({ name: pendingName, kills: parseInt(killsOnly[1]) });
-      pendingName = null;
+    if (killsOnly) {
+      current.kills.push(parseInt(killsOnly[1]));
       continue;
     }
 
-    // Pure noise — skip silently, preserve pendingName
-    if (noiseRe.test(line)) continue;
+    // Junk UI label
+    if (junkRe.test(line)) continue;
 
-    // Junk label — reset pendingName
-    if (junkRe.test(line)) { pendingName = null; continue; }
-
-    // Looks like a player name — store as pending
-    if (current && line.length >= 2 && !/^\d+$/.test(line)) {
-      pendingName = line;
+    // Anything else that looks like a name
+    if (line.length >= 2 && !/^\d+$/.test(line)) {
+      current.names.push(line);
     }
   }
-  if (current && current.players.length > 0) teams.push(current);
+  flushTeam();
 
   return teams;
 }
