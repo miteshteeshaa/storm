@@ -242,6 +242,19 @@ function parseOCRText(rawText) {
       }
     }
 
+    // "9 TB HAIDER" — placement number glued to player name on same line
+    const gluedPlaceRe = /^(\d{1,2})\s+(.+)$/;
+    const gluedMatch = gluedPlaceRe.exec(line);
+    if (gluedMatch) {
+      const p = parseInt(gluedMatch[1]);
+      const rest = gluedMatch[2].trim();
+      if (p >= 1 && p <= 25 && !/^\d+$/.test(rest) && !killsOnlyRe.test(line)) {
+        flushTeam();
+        current = { placement: p, names: [rest], kills: [] };
+        continue;
+      }
+    }
+
     if (!current) continue;
 
     // Full "name N eliminations" on one line
