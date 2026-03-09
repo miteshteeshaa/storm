@@ -168,7 +168,8 @@ function buildSessionMenu(sessionId) {
         { label: 'Match Results Channel',   value: 'match_channel',     description: 'Where admins upload match screenshots' },
         { label: 'Set Lobby Channels',    value: 'lobby_channels',     description: 'Set private channels per lobby' },
         { label: 'Set Lobby Roles',       value: 'lobby_roles',        description: 'Set access roles per lobby' },
-        { label: 'Google Sheet URL',      value: 'sheet_url',          description: 'Link to this session\'s sheet' },
+        { label: 'Google Sheet URL',      value: 'sheet_url',          description: 'Link to this session's sheet' },
+        { label: '🔄 Reset Sheet Link',   value: 'reset_sheet',        description: 'Unlink sheet so /link generates a new one' },
         { label: 'Results Template',      value: 'results_template',   description: 'Background image for /results' },
         { label: 'Results Font Colour',   value: 'results_font_color', description: 'Text colour for /results overlay' },
         { label: '🗑️ Delete Session',     value: 'delete_session',     description: 'Remove this session entirely' },
@@ -593,6 +594,15 @@ async function configureSession(interaction, msg, guildId, sessionId) {
       setSessionConfig(guildId, sessionId, { sheet_url: m.fields.getTextInputValue('sheet_url_input').trim() });
       const { cfg: c2, settings: stg2, lobbyConf: lc2 } = fresh();
       await m.deferUpdate();
+      await interaction.editReply({ content: null, embeds: [buildSessionEmbed(getConfig(guildId), stg2, lc2, { ...session, _cfg: c2 })], components: [buildSessionMenu(sessionId), buildBackRow()] });
+      continue;
+    }
+
+    // ── Reset Sheet Link ─────────────────────────────────────────────────
+    if (value === 'reset_sheet') {
+      setSessionConfig(guildId, sessionId, { spreadsheet_id: null, sheet_url: null });
+      await i.deferUpdate();
+      const { cfg: c2, settings: stg2, lobbyConf: lc2 } = fresh();
       await interaction.editReply({ content: null, embeds: [buildSessionEmbed(getConfig(guildId), stg2, lc2, { ...session, _cfg: c2 })], components: [buildSessionMenu(sessionId), buildBackRow()] });
       continue;
     }
