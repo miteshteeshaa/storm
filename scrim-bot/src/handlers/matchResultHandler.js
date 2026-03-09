@@ -282,7 +282,12 @@ function parseOCRText(rawText) {
 // This handles stand-ins or players with differently-prefixed names.
 
 function detectTagByMajority(players, registeredSlots) {
-  const names = players.map(p => p.name.toLowerCase());
+  // Normalize OCR misreads: leading I or l that should be 1 (e.g. "Itke" → "1tke")
+  function normalizeOCR(str) {
+    return str.toLowerCase().replace(/^[il](?=\d)/, '1'); // "Itke" → "1tke", "l9g" → "19g"
+  }
+
+  const names = players.map(p => normalizeOCR(p.name));
 
   let bestTag   = null;
   let bestSlot  = null;
@@ -353,12 +358,12 @@ async function handleMatchResultMessage(message) {
   const triggerMatch = TRIGGER_RE.exec(content);
   if (!triggerMatch) return;
 
-  // Must have exactly one image attachment
-  const imageAttachment = message.attachments.find(a =>
+  // Collect ALL image attachments
+  const imageAttachments = [...message.attachments.values()].filter(a =>
     a.contentType?.startsWith('image/') ||
     /\.(png|jpg|jpeg|webp)$/i.test(a.name || '')
   );
-  if (!imageAttachment) return;
+  if (imageAttachments.length === 0) return;
 
   // Find which session owns this channel (match_channel)
   const sessions = getSessions(guildId);
@@ -392,14 +397,17 @@ async function handleMatchResultMessage(message) {
   }
 
   // Acknowledge immediately so the admin knows it's working
-  const processingMsg = await message.reply({ content: `⏳ Processing **Lobby ${lobbyLetter} — Match ${matchNumber}**...` });
+  const processingMsg = await message.reply({ content: `⏳ Processing **Lobby ${lobbyLetter} — Match ${matchNumber}** (${imageAttachments.length} screenshot${imageAttachments.length > 1 ? 's' : ''})...` });
 
   try {
-    // 1. Download image
-    const imageBuffer = await downloadImage(imageAttachment.url);
-
-    // 2. Run Vision OCR
-    const rawText = await runVision(imageBuffer);
+    // 1. Download + OCR all images, concatenate text
+    const ocrParts = await Promise.all(
+      imageAttachments.map(async (att) => {
+        const buf = await downloadImage(att.url);
+        return await runVision(buf);
+      })
+    );
+    const rawText = ocrParts.filter(Boolean).join('\n');
     if (!rawText) throw new Error('Vision API returned no text. Is the Vision API enabled in your Google Cloud project?');
 
     console.log(`[matchResult] Raw OCR text for ${lobbyLetter}${matchNumber}:\n${rawText}`);
