@@ -220,7 +220,7 @@ function parseOCRText(rawText) {
       const playerName = elimMatch[1].trim();
       const kills      = parseInt(elimMatch[2]);
       // Skip lines that look like UI labels, not player names
-      if (playerName.length >= 2 && !/^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|PEN|RESULT)/i.test(playerName)) {
+      if (playerName.length >= 2 && !/^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i.test(playerName)) {
         current.players.push({ name: playerName, kills });
       }
     }
