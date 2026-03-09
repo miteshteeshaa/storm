@@ -482,7 +482,7 @@ async function syncTeamsToSheet(spreadsheetId, slots, slotsPerLobby = 24, firstS
     for (const t of teams) {
       const s = t.lobby_slot;
       if (s >= 1 && s <= maxSlot) {
-        nameValues[s - 1] = [t.team_name || ''];
+        nameValues[s - 1] = [(t.team_name || '').replace(/<@!?\d+>/g, '').replace(/<@&\d+>/g, '').replace(/<#\d+>/g, '').trim()];
         tagValues[s - 1]  = [t.team_tag  || ''];
       }
     }
