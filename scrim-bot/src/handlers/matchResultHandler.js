@@ -190,7 +190,8 @@ function downloadImage(urlStr) {
 // We find the longest common prefix of all player names in the group,
 // then compare it case-insensitively against registered team tags.
 
-function parseOCRText(rawText) {
+
+function parseOCRText(rawText, registeredTags = []) {
   // Normalize common OCR misreads
   const normalized = rawText
     .replace(/\bO\b(?=\s+eliminations?)/gi, '0')
@@ -205,14 +206,16 @@ function parseOCRText(rawText) {
 
   const teams  = [];
   let current  = null;
+  let lastPlacement = 0;
 
   const elimRe      = /^(.+?)\s+(\d+)\s+eliminations?$/i;
   const killsOnlyRe = /^(\d+)\s+eliminations?$/i;
   const placeRe     = /^(\d{1,2})$/;
   const noiseRe     = /^(PUBG|MOBILE|Continue)$/i;
   const junkRe      = /^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i;
+  const scoreRe     = /^\d{3,}$/; // 3+ digit numbers are scores, not placements
 
-  // Helper: flush current team — zip names + kills even if counts differ
+  // Helper: flush current team
   function flushTeam() {
     if (!current) return;
     const { placement, names, kills } = current;
@@ -231,15 +234,21 @@ function parseOCRText(rawText) {
   for (const line of lines) {
     if (noiseRe.test(line)) continue;
 
-    // Placement number → start new team
+    // Skip 3+ digit score numbers (190, 200, 210 etc.)
+    if (scoreRe.test(line)) continue;
+
+    // Placement number → start new team (must be strictly increasing)
     const placeMatch = placeRe.exec(line);
     if (placeMatch) {
       const p = parseInt(placeMatch[1]);
-      if (p >= 1 && p <= 25) {
+      if (p >= 1 && p <= 25 && p > lastPlacement) {
         flushTeam();
+        lastPlacement = p;
         current = { placement: p, names: [], kills: [] };
         continue;
       }
+      // Not a valid placement — skip this bare number
+      continue;
     }
 
     // "9 TB HAIDER" — placement number glued to player name on same line
@@ -248,11 +257,13 @@ function parseOCRText(rawText) {
     if (gluedMatch) {
       const p = parseInt(gluedMatch[1]);
       const rest = gluedMatch[2].trim();
-      if (p >= 1 && p <= 25 && !/^\d+$/.test(rest) && !killsOnlyRe.test(line)) {
+      if (p >= 1 && p <= 25 && p > lastPlacement && !/^\d+$/.test(rest) && !killsOnlyRe.test(line)) {
         flushTeam();
+        lastPlacement = p;
         current = { placement: p, names: [rest], kills: [] };
         continue;
       }
+      // Not a valid glued placement — fall through to name handling
     }
 
     if (!current) continue;
@@ -287,6 +298,7 @@ function parseOCRText(rawText) {
 
   return teams;
 }
+
 
 // ── Tag detection: majority vote ─────────────────────────────────────────────
 // For each registered tag, count how many players in this group have a name
@@ -432,18 +444,25 @@ async function handleMatchResultMessage(message) {
 
     console.log(`[matchResult] Raw OCR text for ${lobbyLetter}${matchNumber}:\n${rawText}`);
 
-    // 3. Parse OCR → teams
-    const ocrTeams = parseOCRText(rawText);
-    if (ocrTeams.length === 0) {
-      throw new Error('Could not extract any team data from the screenshot. Make sure the image shows the full results screen.');
-    }
-
-    // 4. Get registered teams for this lobby
-    const data      = getRegistrations(guildId, sessionId);
+    // 3. Get registered teams for this lobby (needed before parsing for tag-aware detection)
+    const data       = getRegistrations(guildId, sessionId);
     const lobbySlots = data.slots.filter(t => t.lobby === lobbyLetter && t.lobby_slot);
 
     if (lobbySlots.length === 0) {
       throw new Error(`No teams are assigned to Lobby ${lobbyLetter}. Assign teams first using team card reactions.`);
+    }
+
+    console.log(`[matchResult] Lobby ${lobbyLetter}: ${lobbySlots.length} registered slots — tags: ${lobbySlots.map(s => s.team_tag).join(', ')}`);
+
+    // 4. Parse OCR → teams (pass registered tags for smarter boundary detection)
+    const registeredTags = lobbySlots
+      .filter(s => s.team_tag)
+      .map(s => s.team_tag.toLowerCase()
+        .replace(/^[il](?=\d)/, '1')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+    const ocrTeams = parseOCRText(rawText, registeredTags);
+    if (ocrTeams.length === 0) {
+      throw new Error('Could not extract any team data from the screenshot. Make sure the image shows the full results screen.');
     }
 
     // 5. Match OCR teams → registered slots
@@ -475,6 +494,16 @@ async function handleMatchResultMessage(message) {
     const matched    = matchedResults.filter(r => !r.disqualified);
     const disqualified = matchedResults.filter(r => r.disqualified);
     const unmatched  = ocrTeams.length - matchedResults.length;
+
+    // Debug: log which OCR teams failed to match
+    if (unmatched > 0) {
+      const matchedPlacements = new Set(matchedResults.map(r => r.placement));
+      const unmatchedTeams = ocrTeams.filter(t => !matchedPlacements.has(t.placement));
+      unmatchedTeams.forEach(t => {
+        const names = t.players.map(p => p.name).join(', ');
+        console.log(`[matchResult] Unmatched OCR team #${t.placement}: ${names}`);
+      });
+    }
 
     // Sort by placement for display
     const sorted = [...matchedResults].sort((a, b) => a.placement - b.placement);
