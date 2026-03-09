@@ -191,8 +191,12 @@ function downloadImage(urlStr) {
 // then compare it case-insensitively against registered team tags.
 
 function parseOCRText(rawText) {
-  // Normalize: capital O that OCR misreads as digit before "eliminations" → 0
-  const normalized = rawText.replace(/\bO\b(?=\s+eliminations?)/gi, '0');
+  // Normalize common OCR misreads
+  const normalized = rawText
+    .replace(/\bO\b(?=\s+eliminations?)/gi, '0')        // capital O → 0
+    .replace(/\bI\b(?=\s+eliminations?)/g,  '1')        // capital I → 1
+    .replace(/\bDel?i?m?i?nations?\b/gi, '0 eliminations') // "Deliminations" → "0 eliminations"
+    .replace(/\b(\d)\s*elim\b/gi, '$1 eliminations');   // "3elim" → "3 eliminations"
 
   const lines = normalized
     .split('\n')
@@ -201,11 +205,15 @@ function parseOCRText(rawText) {
 
   const teams = [];
   let current     = null;
-  let pendingName = null; // holds a name line waiting for a kills line
+  let pendingName = null;
 
-  const elimRe     = /^(.+?)\s+(\d+)\s+eliminations?$/i; // "spartaFIREBOY 3 eliminations"
-  const killsOnlyRe = /^(\d+)\s+eliminations?$/i;          // "3 eliminations" alone
-  const placeRe    = /^(\d{1,2})$/;
+  const elimRe      = /^(.+?)\s+(\d+)\s+eliminations?$/i;
+  const killsOnlyRe = /^(\d+)\s+eliminations?$/i;
+  const placeRe     = /^(\d{1,2})$/;
+  // Lines that are pure UI noise — skip and DON'T reset pendingName
+  const noiseRe     = /^(PUBG|MOBILE|Continue|\d+\s*R$|3\s*R$|DMX\s*\|)/i;
+  // Lines that should reset pendingName
+  const junkRe      = /^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i;
 
   for (const line of lines) {
     // Placement number
@@ -220,19 +228,19 @@ function parseOCRText(rawText) {
       }
     }
 
-    // Full "name N eliminations" on one line (normal case)
+    // Full "name N eliminations" on one line
     const elimMatch = elimRe.exec(line);
     if (elimMatch && current) {
       const playerName = elimMatch[1].trim();
       const kills      = parseInt(elimMatch[2]);
-      if (playerName.length >= 2 && !/^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i.test(playerName)) {
+      if (playerName.length >= 2 && !junkRe.test(playerName)) {
         current.players.push({ name: playerName, kills });
         pendingName = null;
       }
       continue;
     }
 
-    // Split line: kills-only line following a pending name
+    // Kills-only line following a pending name (split line case)
     const killsOnly = killsOnlyRe.exec(line);
     if (killsOnly && current && pendingName) {
       current.players.push({ name: pendingName, kills: parseInt(killsOnly[1]) });
@@ -240,13 +248,15 @@ function parseOCRText(rawText) {
       continue;
     }
 
-    // Store as pending name if it looks like a player name
-    if (current && line.length >= 2 &&
-        !/^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT|PUBG|MOBILE|Continue|DMX)/i.test(line) &&
-        !/^\d+$/.test(line)) {
+    // Pure noise — skip silently, preserve pendingName
+    if (noiseRe.test(line)) continue;
+
+    // Junk label — reset pendingName
+    if (junkRe.test(line)) { pendingName = null; continue; }
+
+    // Looks like a player name — store as pending
+    if (current && line.length >= 2 && !/^\d+$/.test(line)) {
       pendingName = line;
-    } else {
-      pendingName = null;
     }
   }
   if (current && current.players.length > 0) teams.push(current);
@@ -271,8 +281,8 @@ function detectTagByMajority(players, registeredSlots) {
     if (!slot.lobby || !slot.team_tag) continue;
     const tag   = slot.team_tag.toLowerCase();
     const count = names.filter(n => n.startsWith(tag)).length;
-    // Need at least 2 matching players, and must beat current best
-    if (count >= 2 && count > bestCount) {
+    // Need at least 1 matching player, and must beat current best
+    if (count >= 1 && count > bestCount) {
       bestCount = count;
       bestTag   = tag;
       bestSlot  = slot;
@@ -298,7 +308,7 @@ function matchTeamsToSlots(ocrTeams, registeredSlots) {
 
     const { slot, matchCount, tag } = detectTagByMajority(players, registeredSlots);
 
-    // No registered tag had >= 2 matching players — skip
+    // No registered tag matched any player — skip
     if (!slot) continue;
 
     // >=2 player rule: fewer than 2 total visible players = 0 kills, placement stands
