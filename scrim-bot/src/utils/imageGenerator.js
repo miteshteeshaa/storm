@@ -164,25 +164,35 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath, 
   const logoZL = Math.round(layout.LOGO_ZL_FX * TW);
   const logoZR = Math.round(layout.LOGO_ZR_FX * TW);
 
+  // Max pixels available for team name before placement column
+  const nameMaxW_L = L.place - L.name - (logo ? logoW + 4 : 0) - 4;
+  const nameMaxW_R = R.place - R.name - (logo ? logoW + 4 : 0) - 4;
+
   for (let i = 0; i < rowMids.length; i++) {
     const y = rowMids[i];
     if (i < leftTeams.length) {
       const t = leftTeams[i];
       drawText(ctx, t.rank,          L.rank,  y, NORMAL, accentColor, 'center');
-      drawText(ctx, t.team_name,     L.name,  y, NORMAL, fontColor,   'left');
+      drawFitText(ctx, t.team_name,  L.name,  y, fontSize, fontColor, nameMaxW_L);
       drawText(ctx, t.placement_pts, L.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      L.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         L.total, y, NORMAL, accentColor, 'center');
-      if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZL, y, t.wins, accentColor);
+      if (logo && t.wins > 0) {
+        const nameW = measureFitText(ctx, t.team_name, fontSize, nameMaxW_L);
+        drawLogos(ctx, logo, logoW, logoH, L.name + nameW + 3, y, t.wins, accentColor);
+      }
     }
     if (i < rightTeams.length) {
       const t = rightTeams[i];
       drawText(ctx, t.rank,          R.rank,  y, NORMAL, accentColor, 'center');
-      drawText(ctx, t.team_name,     R.name,  y, NORMAL, fontColor,   'left');
+      drawFitText(ctx, t.team_name,  R.name,  y, fontSize, fontColor, nameMaxW_R);
       drawText(ctx, t.placement_pts, R.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      R.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         R.total, y, NORMAL, accentColor, 'center');
-      if (logo && t.wins > 0) drawLogos(ctx, logo, logoW, logoH, logoZR, y, t.wins, accentColor);
+      if (logo && t.wins > 0) {
+        const nameW = measureFitText(ctx, t.team_name, fontSize, nameMaxW_R);
+        drawLogos(ctx, logo, logoW, logoH, R.name + nameW + 3, y, t.wins, accentColor);
+      }
     }
   }
 }
@@ -216,6 +226,38 @@ async function renderSingle(ctx, TW, TH, teams, fontColor, accentColor, logoPath
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Draw text shrinking font size until it fits within maxW
+function drawFitText(ctx, text, x, y, baseFontSize, color, maxW) {
+  let size = baseFontSize;
+  const minSize = Math.max(7, Math.round(baseFontSize * 0.6));
+  ctx.font = makeFont(size, false);
+  while (ctx.measureText(String(text)).width > maxW && size > minSize) {
+    size--;
+    ctx.font = makeFont(size, false);
+  }
+  ctx.save();
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle    = 'rgba(0,0,0,0.85)';
+  ctx.fillText(String(text), x + 1, y + 1);
+  ctx.fillStyle    = color;
+  ctx.fillText(String(text), x, y);
+  ctx.restore();
+}
+
+// Measure the actual width used by drawFitText (same shrink logic)
+function measureFitText(ctx, text, baseFontSize, maxW) {
+  let size = baseFontSize;
+  const minSize = Math.max(7, Math.round(baseFontSize * 0.6));
+  ctx.font = makeFont(size, false);
+  while (ctx.measureText(String(text)).width > maxW && size > minSize) {
+    size--;
+    ctx.font = makeFont(size, false);
+  }
+  return Math.min(ctx.measureText(String(text)).width, maxW);
+}
+
 function drawLogos(ctx, logo, lw, lh, startX, midY, count, fontColor) {
   const topY  = midY - Math.floor(lh / 2);
   const tight = 2; // px gap between logos
