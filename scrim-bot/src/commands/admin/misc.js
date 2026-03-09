@@ -358,7 +358,7 @@ const clearCmd = {
         await postFreshLobbySlotList(interaction.guild, l, lobbyConf, settings, sessionId);
       }
 
-      return interaction.editReply({
+      return targetPick.update({
         content: null,
         embeds: [new EmbedBuilder()
           .setColor(0x00FF7F).setTitle(`🗑️ CLEARED — ${sessionName} — ALL`)
@@ -399,7 +399,7 @@ const clearCmd = {
       setSlotListIds(interaction.guildId, { [`lobby_${letter}`]: null }, sessionId);
       await postFreshLobbySlotList(interaction.guild, letter, lobbyConf, settings, sessionId);
 
-      return interaction.editReply({
+      return targetPick.update({
         content: null,
         embeds: [new EmbedBuilder()
           .setColor(0xFFAA00).setTitle(`🏟️ CLEARED — ${sessionName} — LOBBY ${letter}`)
