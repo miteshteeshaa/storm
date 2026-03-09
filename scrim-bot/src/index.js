@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { loadCommands, deployCommands } = require('./handlers/commandHandler');
 const interactionHandler = require('./handlers/interactionHandler');
 const { handleReactionAdd, handleReactionRemove } = require('./handlers/reactionHandler');
+const { handleMatchResultMessage } = require('./handlers/matchResultHandler');
 const { getConfig, getRegistrations, getScrimSettings } = require('./utils/database');
 const { setTeamCard, getTeamCards } = require('./utils/database');
 const http = require('http');
@@ -107,6 +108,9 @@ client.once('ready', async () => {
 
 // ─── Slash commands & components ──────────────────────────────────────────────
 client.on('interactionCreate', (interaction) => interactionHandler(client, interaction));
+
+// ─── Match result screenshots ─────────────────────────────────────────────────
+client.on('messageCreate', (message) => handleMatchResultMessage(message));
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
 client.on('messageReactionAdd',    (reaction, user) => handleReactionAdd(reaction, user));
