@@ -377,7 +377,8 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
   const sheets = google.sheets({ version:'v4', auth });
   const drive  = google.drive({ version:'v3', auth });
 
-  // 1. Create spreadsheet (in the OAuth user's Google Drive)
+  // 1. Create spreadsheet — place in shared Drive folder if configured
+  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || null;
   const create = await sheets.spreadsheets.create({
     requestBody: {
       properties: { title: `${scrimName} --- SCRIM SHEET` },
@@ -388,7 +389,31 @@ async function createServerSheet(scrimName, slotsPerLobby = 24, lobbyLetters = [
   const spreadsheetId = create.data.spreadsheetId;
   const sheetMeta     = create.data.sheets;
 
-  // 2. Anyone with link can EDIT
+  // 2. Move into shared folder so it appears in your Drive
+  if (folderId) {
+    try {
+      await drive.files.update({
+        fileId: spreadsheetId,
+        addParents: folderId,
+        removeParents: 'root',
+        fields: 'id, parents',
+      });
+    } catch (e) { console.warn('------ Could not move to folder:', e.message); }
+  }
+
+  // 3. Transfer ownership to DRIVE_OWNER_EMAIL so it appears in your Drive
+  const ownerEmail = process.env.DRIVE_OWNER_EMAIL || null;
+  if (ownerEmail) {
+    try {
+      await drive.permissions.create({
+        fileId: spreadsheetId,
+        transferOwnership: true,
+        requestBody: { role: 'owner', type: 'user', emailAddress: ownerEmail },
+      });
+    } catch (e) { console.warn('------ Could not transfer ownership:', e.message); }
+  }
+
+  // 4. Anyone with link can EDIT
   try {
     await drive.permissions.create({
       fileId: spreadsheetId,
