@@ -282,9 +282,11 @@ function parseOCRText(rawText) {
 // This handles stand-ins or players with differently-prefixed names.
 
 function detectTagByMajority(players, registeredSlots) {
-  // Normalize OCR misreads: leading I or l that should be 1 (e.g. "Itke" → "1tke")
+  // Normalize OCR misreads
   function normalizeOCR(str) {
-    return str.toLowerCase().replace(/^[il](?=\d)/, '1'); // "Itke" → "1tke", "l9g" → "19g"
+    return str.toLowerCase()
+      .replace(/^[il](?=\d)/, '1')           // "Itke" → "1tke"
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // strip accents: "aès" → "aes"
   }
 
   const names = players.map(p => normalizeOCR(p.name));
@@ -315,7 +317,8 @@ function detectTagByMajority(players, registeredSlots) {
 //    player_count, match_count, disqualified }]
 
 function matchTeamsToSlots(ocrTeams, registeredSlots) {
-  const results = [];
+  const results  = [];
+  const usedSlots = new Set(); // prevent same slot being written twice
 
   for (const ocrTeam of ocrTeams) {
     const { placement, players } = ocrTeam;
@@ -326,6 +329,10 @@ function matchTeamsToSlots(ocrTeams, registeredSlots) {
 
     // No registered tag matched any player — skip
     if (!slot) continue;
+
+    // Skip if this slot was already matched by a better/earlier OCR team
+    if (usedSlots.has(slot.lobby_slot)) continue;
+    usedSlots.add(slot.lobby_slot);
 
     // >=2 player rule: fewer than 2 total visible players = 0 kills, placement stands
     const effectiveKills = playerCount >= 2 ? totalKills : 0;
