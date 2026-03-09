@@ -191,38 +191,62 @@ function downloadImage(urlStr) {
 // then compare it case-insensitively against registered team tags.
 
 function parseOCRText(rawText) {
-  const lines = rawText
+  // Normalize: capital O that OCR misreads as digit before "eliminations" → 0
+  const normalized = rawText.replace(/\bO\b(?=\s+eliminations?)/gi, '0');
+
+  const lines = normalized
     .split('\n')
     .map(l => l.trim())
     .filter(Boolean);
 
-  const teams = [];   // [{ placement, players: [{name, kills}] }]
-  let current = null;
+  const teams = [];
+  let current     = null;
+  let pendingName = null; // holds a name line waiting for a kills line
 
-  // "7 eliminations", "1 elimination", "0 eliminations"
-  const elimRe = /^(.+?)\s+(\d+)\s+eliminations?$/i;
-  // bare placement number
-  const placeRe = /^(\d{1,2})$/;
+  const elimRe     = /^(.+?)\s+(\d+)\s+eliminations?$/i; // "spartaFIREBOY 3 eliminations"
+  const killsOnlyRe = /^(\d+)\s+eliminations?$/i;          // "3 eliminations" alone
+  const placeRe    = /^(\d{1,2})$/;
 
   for (const line of lines) {
+    // Placement number
     const placeMatch = placeRe.exec(line);
     if (placeMatch) {
       const p = parseInt(placeMatch[1]);
       if (p >= 1 && p <= 25) {
         if (current) teams.push(current);
-        current = { placement: p, players: [] };
+        current     = { placement: p, players: [] };
+        pendingName = null;
         continue;
       }
     }
 
+    // Full "name N eliminations" on one line (normal case)
     const elimMatch = elimRe.exec(line);
     if (elimMatch && current) {
       const playerName = elimMatch[1].trim();
       const kills      = parseInt(elimMatch[2]);
-      // Skip lines that look like UI labels, not player names
       if (playerName.length >= 2 && !/^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i.test(playerName)) {
         current.players.push({ name: playerName, kills });
+        pendingName = null;
       }
+      continue;
+    }
+
+    // Split line: kills-only line following a pending name
+    const killsOnly = killsOnlyRe.exec(line);
+    if (killsOnly && current && pendingName) {
+      current.players.push({ name: pendingName, kills: parseInt(killsOnly[1]) });
+      pendingName = null;
+      continue;
+    }
+
+    // Store as pending name if it looks like a player name
+    if (current && line.length >= 2 &&
+        !/^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT|PUBG|MOBILE|Continue|DMX)/i.test(line) &&
+        !/^\d+$/.test(line)) {
+      pendingName = line;
+    } else {
+      pendingName = null;
     }
   }
   if (current && current.players.length > 0) teams.push(current);
