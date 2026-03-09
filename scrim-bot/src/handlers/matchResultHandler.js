@@ -28,6 +28,19 @@ const {
 } = require('../utils/database');
 const { writeMatchResult } = require('../utils/sheets');
 
+// Returns the longest common prefix shared by all strings in the array
+function commonPrefix(strings) {
+  if (!strings || strings.length === 0) return '';
+  let prefix = strings[0];
+  for (let i = 1; i < strings.length; i++) {
+    while (!strings[i].startsWith(prefix)) {
+      prefix = prefix.slice(0, -1);
+      if (prefix === '') return '';
+    }
+  }
+  return prefix;
+}
+
 // Admin check for Message objects (not Interactions)
 async function isAdminMessage(message) {
   if (!message.guild || !message.member) return false;
