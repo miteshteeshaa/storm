@@ -5,9 +5,19 @@
 const { google } = require('googleapis');
 
 function getAuth() {
-  // Support both Service Account (preferred) and OAuth2 (fallback)
+  // Prefer OAuth2 for Sheets/Drive (creates files in your personal Drive)
+  const clientId     = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  if (clientId && clientSecret && refreshToken) {
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost');
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    console.log('--- Using OAuth2 with refresh token');
+    return oauth2Client;
+  }
+
+  // Fallback: Service Account (GOOGLE_CREDENTIALS_JSON)
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
-    // Service Account JSON --- paste the entire key file content as env var
     let creds;
     try { creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); }
     catch { throw new Error('GOOGLE_CREDENTIALS_JSON is not valid JSON.'); }
@@ -22,17 +32,7 @@ function getAuth() {
     return auth;
   }
 
-  // Fallback: OAuth2 refresh token
-  const clientId     = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Set GOOGLE_CREDENTIALS_JSON (service account) or GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN.');
-  }
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost');
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-  console.log('--- Using OAuth2 with refresh token');
-  return oauth2Client;
+  throw new Error('Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN (OAuth2) or GOOGLE_CREDENTIALS_JSON (service account).');
 }
 
 function ordinal(n) {
