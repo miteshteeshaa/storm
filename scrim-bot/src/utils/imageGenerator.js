@@ -164,34 +164,64 @@ async function renderDual(ctx, TW, TH, teams, fontColor, accentColor, logoPath, 
   const logoZL = Math.round(layout.LOGO_ZL_FX * TW);
   const logoZR = Math.round(layout.LOGO_ZR_FX * TW);
 
-  // Max pixels available for team name before placement column
-  const nameMaxW_L = L.place - L.name - (logo ? logoW + 4 : 0) - 4;
-  const nameMaxW_R = R.place - R.name - (logo ? logoW + 4 : 0) - 4;
+  // Total available space between name col and placement col
+  const totalColW_L = L.place - L.name - 4;
+  const totalColW_R = R.place - R.name - 4;
+
+  // Max wins across all teams (to pre-calculate logo space needed)
+  const maxWins = Math.max(0, ...teams.map(t => t.wins || 0));
+  const logoSlots = maxWins > 0 ? Math.min(maxWins > 3 ? 1 : maxWins, 3) : 0;
+  const logoTotalW = logo ? (logoSlots * (logoW + 2)) : 0;
+
+  const nameMaxW_L = totalColW_L - logoTotalW - (logoTotalW > 0 ? 4 : 0);
+  const nameMaxW_R = totalColW_R - logoTotalW - (logoTotalW > 0 ? 4 : 0);
 
   for (let i = 0; i < rowMids.length; i++) {
     const y = rowMids[i];
     if (i < leftTeams.length) {
       const t = leftTeams[i];
+      const wins = t.wins || 0;
+      // Logo space for this team
+      const thisLogoSlots = wins > 3 ? 1 : Math.min(wins, 3);
+      const thisLogoW = logo && wins > 0 ? thisLogoSlots * (logoW + 2) : 0;
+      const thisNameMaxW = totalColW_L - thisLogoW - (thisLogoW > 0 ? 4 : 0);
       drawText(ctx, t.rank,          L.rank,  y, NORMAL, accentColor, 'center');
-      drawFitText(ctx, cleanTeamName(t.team_name),  L.name,  y, fontSize, fontColor, nameMaxW_L);
+      drawFitText(ctx, cleanTeamName(t.team_name), L.name, y, fontSize, fontColor, thisNameMaxW);
       drawText(ctx, t.placement_pts, L.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      L.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         L.total, y, NORMAL, accentColor, 'center');
-      if (logo && t.wins > 0) {
-        const nameW = measureFitText(ctx, t.team_name, fontSize, nameMaxW_L);
-        drawLogos(ctx, logo, logoW, logoH, L.name + nameW + 3, y, t.wins, accentColor);
+      if (logo && wins > 0) {
+        const nameW = measureFitText(ctx, cleanTeamName(t.team_name), fontSize, thisNameMaxW);
+        const logoStartX = L.name + nameW + 3;
+        // Clip so logos never exceed placement column
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(logoStartX, y - logoH, L.place - logoStartX - 2, logoH * 2);
+        ctx.clip();
+        drawLogos(ctx, logo, logoW, logoH, logoStartX, y, wins, accentColor);
+        ctx.restore();
       }
     }
     if (i < rightTeams.length) {
       const t = rightTeams[i];
+      const wins = t.wins || 0;
+      const thisLogoSlots = wins > 3 ? 1 : Math.min(wins, 3);
+      const thisLogoW = logo && wins > 0 ? thisLogoSlots * (logoW + 2) : 0;
+      const thisNameMaxW = totalColW_R - thisLogoW - (thisLogoW > 0 ? 4 : 0);
       drawText(ctx, t.rank,          R.rank,  y, NORMAL, accentColor, 'center');
-      drawFitText(ctx, cleanTeamName(t.team_name),  R.name,  y, fontSize, fontColor, nameMaxW_R);
+      drawFitText(ctx, cleanTeamName(t.team_name), R.name, y, fontSize, fontColor, thisNameMaxW);
       drawText(ctx, t.placement_pts, R.place, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.kill_pts,      R.kills, y, NORMAL, fontColor,   'center');
       drawText(ctx, t.total,         R.total, y, NORMAL, accentColor, 'center');
-      if (logo && t.wins > 0) {
-        const nameW = measureFitText(ctx, t.team_name, fontSize, nameMaxW_R);
-        drawLogos(ctx, logo, logoW, logoH, R.name + nameW + 3, y, t.wins, accentColor);
+      if (logo && wins > 0) {
+        const nameW = measureFitText(ctx, cleanTeamName(t.team_name), fontSize, thisNameMaxW);
+        const logoStartX = R.name + nameW + 3;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(logoStartX, y - logoH, R.place - logoStartX - 2, logoH * 2);
+        ctx.clip();
+        drawLogos(ctx, logo, logoW, logoH, logoStartX, y, wins, accentColor);
+        ctx.restore();
       }
     }
   }
