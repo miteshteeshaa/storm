@@ -497,14 +497,11 @@ async function handleReactionAdd(reaction, user) {
   const firstTeam = data.slots[teamIndices[0]];
   const prevConfirmed = firstTeam.confirmed;
 
-  let newConfirmed;
-  if (emoji === '✅') {
-    // If already confirmed, toggle off (undo); otherwise confirm
-    newConfirmed = prevConfirmed === true ? null : true;
-  } else {
-    // If already cancelled, toggle off (undo); otherwise cancel
-    newConfirmed = prevConfirmed === false ? null : false;
-  }
+  // If reacting with the same emoji as current state, do nothing (no toggle-off)
+  if (emoji === '✅' && prevConfirmed === true) return;
+  if (emoji === '❌' && prevConfirmed === false) return;
+
+  const newConfirmed = emoji === '✅' ? true : false;
 
   // Apply the same confirmed state to ALL of this player's slots in this lobby
   for (const idx of teamIndices) {
