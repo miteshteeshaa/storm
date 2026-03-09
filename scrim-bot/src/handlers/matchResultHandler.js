@@ -192,12 +192,14 @@ function downloadImage(urlStr) {
 
 
 function parseOCRText(rawText, registeredTags = []) {
-  // Normalize common OCR misreads
+  // Normalize common OCR misreads + OCR symbol artifacts
   const normalized = rawText
     .replace(/\bO\b(?=\s+eliminations?)/gi, '0')
     .replace(/\bI\b(?=\s+eliminations?)/g,  '1')
     .replace(/\bDel?i?m?i?nations?\b/gi, '0 eliminations')
-    .replace(/\b(\d)\s*elim\b/gi, '$1 eliminations');
+    .replace(/\b(\d)\s*elim\b/gi, '$1 eliminations')
+    // Normalize arrow/dash separators OCR reads between tag and name (NBA→CAPTAIN, NBA-CAPTAIN)
+    .replace(/([A-Za-z0-9])[→—–-]([A-Za-z])/g, '$1$2');
 
   const lines = normalized
     .split('\n')
@@ -206,14 +208,16 @@ function parseOCRText(rawText, registeredTags = []) {
 
   const teams  = [];
   let current  = null;
-  let lastPlacement = 0;
 
   const elimRe      = /^(.+?)\s+(\d+)\s+eliminations?$/i;
   const killsOnlyRe = /^(\d+)\s+eliminations?$/i;
   const placeRe     = /^(\d{1,2})$/;
   const noiseRe     = /^(PUBG|MOBILE|Continue)$/i;
   const junkRe      = /^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i;
-  const scoreRe     = /^\d{3,}$/; // 3+ digit numbers are scores, not placements
+  const scoreRe     = /^\d{3,}$/; // 3+ digit numbers (190, 200, 210) are scores not placements
+
+  // Track which placements we've already seen to avoid duplicates
+  const seenPlacements = new Set();
 
   // Helper: flush current team
   function flushTeam() {
@@ -229,23 +233,35 @@ function parseOCRText(rawText, registeredTags = []) {
       }
     }
     if (players.length > 0) teams.push({ placement, players });
+    current = null;
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (noiseRe.test(line)) continue;
 
     // Skip 3+ digit score numbers (190, 200, 210 etc.)
     if (scoreRe.test(line)) continue;
 
-    // Placement number → start new team (must be strictly increasing)
+    // Check if line is a bare placement number (1-25)
     const placeMatch = placeRe.exec(line);
     if (placeMatch) {
       const p = parseInt(placeMatch[1]);
-      if (p >= 1 && p <= 25 && p > lastPlacement) {
-        flushTeam();
-        lastPlacement = p;
-        current = { placement: p, names: [], kills: [] };
-        continue;
+      if (p >= 1 && p <= 25 && !seenPlacements.has(p)) {
+        // Look ahead: is the next non-empty line a player name (not kills-only or another number)?
+        // This confirms this number is a placement, not a stray number mid-team.
+        const nextLine = lines.slice(i + 1).find(l => l.trim().length > 0);
+        const nextIsKillsOnly = nextLine && killsOnlyRe.test(nextLine);
+        const nextIsScore = nextLine && scoreRe.test(nextLine);
+        const nextIsPlacement = nextLine && placeRe.test(nextLine) &&
+          parseInt(nextLine) >= 1 && parseInt(nextLine) <= 25;
+
+        if (!nextIsKillsOnly && !nextIsScore && !nextIsPlacement) {
+          flushTeam();
+          seenPlacements.add(p);
+          current = { placement: p, names: [], kills: [] };
+          continue;
+        }
       }
       // Not a valid placement — skip this bare number
       continue;
@@ -257,16 +273,26 @@ function parseOCRText(rawText, registeredTags = []) {
     if (gluedMatch) {
       const p = parseInt(gluedMatch[1]);
       const rest = gluedMatch[2].trim();
-      if (p >= 1 && p <= 25 && p > lastPlacement && !/^\d+$/.test(rest) && !killsOnlyRe.test(line)) {
+      if (p >= 1 && p <= 25 && !seenPlacements.has(p) &&
+          !/^\d+$/.test(rest) && !killsOnlyRe.test(line)) {
         flushTeam();
-        lastPlacement = p;
+        seenPlacements.add(p);
         current = { placement: p, names: [rest], kills: [] };
         continue;
       }
-      // Not a valid glued placement — fall through to name handling
+      // Fall through to name handling
     }
 
-    if (!current) continue;
+    // If no team started yet and this looks like a player name, it's placement 1 (champion panel)
+    if (!current) {
+      if (line.length >= 2 && !/^\d+$/.test(line) && !junkRe.test(line)) {
+        seenPlacements.add(1);
+        current = { placement: 1, names: [], kills: [] };
+        // Fall through to process this line as a player name below
+      } else {
+        continue;
+      }
+    }
 
     // Full "name N eliminations" on one line
     const elimMatch = elimRe.exec(line);
