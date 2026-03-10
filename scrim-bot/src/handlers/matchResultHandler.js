@@ -340,7 +340,125 @@ function parseOCRText(rawText, registeredTags = []) {
   }
   flushTeam();
 
-  return teams;
+  // ── Tag-based re-splitting of bloated segments ───────────────────────────────
+  // PUBG Mobile results screen has TWO COLUMNS side by side. Google Vision reads
+  // row-by-row, so players from two different teams get INTERLEAVED into one segment:
+  //   rgeEKLAVYAA  |  vpeSPRYZEN   → both land in same placement group
+  //   rge LAKSH    |  vpeDADA      → same group
+  // Fix: for any segment with 5+ players, use registered tags to assign each player
+  // to a tag cluster, then emit a separate team for each cluster with 2+ members.
+
+  function playerMatchesTag(playerName, tag) {
+    const n = playerName.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/^[il](?=\d)/, '1');
+    const t = tag.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/^[il](?=\d)/, '1');
+    return n.startsWith(t);
+  }
+
+  const expandedTeams = [];
+  for (const team of teams) {
+    // Only try to split large groups (5+ players = likely 2 teams merged)
+    if (team.players.length < 5 || registeredTags.length === 0) {
+      expandedTeams.push(team);
+      continue;
+    }
+
+    // Assign each player to the best matching registered tag
+    const tagGroups = new Map(); // tag → players[]
+    const unmatched = [];
+    for (const p of team.players) {
+      const matched = registeredTags.filter(t => playerMatchesTag(p.name, t));
+      if (matched.length === 1) {
+        if (!tagGroups.has(matched[0])) tagGroups.set(matched[0], []);
+        tagGroups.get(matched[0]).push(p);
+      } else if (matched.length > 1) {
+        // Multiple tags match — pick longest (most specific)
+        const best = matched.sort((a, b) => b.length - a.length)[0];
+        if (!tagGroups.has(best)) tagGroups.set(best, []);
+        tagGroups.get(best).push(p);
+      } else {
+        unmatched.push(p);
+      }
+    }
+
+    const validGroups = [...tagGroups.entries()].filter(([, ps]) => ps.length >= 2);
+
+    if (validGroups.length <= 1) {
+      // Can't meaningfully split — keep as-is
+      expandedTeams.push(team);
+      continue;
+    }
+
+    // Sort groups by order of first appearance in original player list
+    const playerOrder = team.players.map(p => {
+      for (const t of registeredTags) {
+        if (playerMatchesTag(p.name, t) && tagGroups.get(t)?.length >= 2) return t;
+      }
+      return null;
+    });
+    const firstSeen = new Map();
+    for (const t of playerOrder) {
+      if (t && !firstSeen.has(t)) firstSeen.set(t, firstSeen.size);
+    }
+    validGroups.sort(([a], [b]) => (firstSeen.get(a) ?? 99) - (firstSeen.get(b) ?? 99));
+
+    for (let ci = 0; ci < validGroups.length; ci++) {
+      const [, ps] = validGroups[ci];
+      expandedTeams.push({ placement: ci === 0 ? team.placement : 0, players: ps });
+    }
+
+    // Orphan players: append to whichever valid group has the closest tag
+    if (unmatched.length > 0 && validGroups.length > 0) {
+      const lastTeam = expandedTeams[expandedTeams.length - 1];
+      for (const p of unmatched) lastTeam.players.push(p);
+    }
+  }
+
+  // Replace teams with expanded version
+  teams.length = 0;
+  teams.push(...expandedTeams);
+
+  // ── Cross-team player deduplication ──────────────────────────────────────────
+  // PUBG Mobile shows a persistent "winner panel" on every scroll page, so
+  // placement-1 players appear in EVERY page's OCR — they get appended to
+  // whichever team group is last on each page, creating bloated groups.
+  //
+  // Fix: when the same player name appears in multiple placement groups,
+  // keep them only in the group where they share the most prefix-mates.
+  // Ties broken by lowest placement (earliest = most likely correct assignment).
+
+  const nameToTeamIdx = new Map();
+  for (let ti = 0; ti < teams.length; ti++) {
+    for (const p of teams[ti].players) {
+      const key = p.name.toLowerCase().trim();
+      if (!nameToTeamIdx.has(key)) nameToTeamIdx.set(key, []);
+      nameToTeamIdx.get(key).push(ti);
+    }
+  }
+
+  const playerHomeTeam = new Map();
+  for (const [name, idxList] of nameToTeamIdx) {
+    if (idxList.length === 1) { playerHomeTeam.set(name, idxList[0]); continue; }
+    const prefix3 = name.slice(0, 3);
+    let bestIdx = idxList[0], bestScore = -1;
+    for (const ti of idxList) {
+      const score = teams[ti].players.filter(p => p.name.toLowerCase().startsWith(prefix3)).length;
+      if (score > bestScore || (score === bestScore && teams[ti].placement < teams[bestIdx].placement)) {
+        bestScore = score; bestIdx = ti;
+      }
+    }
+    playerHomeTeam.set(name, bestIdx);
+  }
+
+  const dedupedTeams = teams.map((team, ti) => ({
+    placement: team.placement,
+    players: team.players.filter(p => playerHomeTeam.get(p.name.toLowerCase().trim()) === ti),
+  })).filter(t => t.players.length > 0);
+
+  return dedupedTeams;
 }
 
 
@@ -385,10 +503,11 @@ function detectTagByMajority(players, registeredSlots) {
 // [{ lobby_slot, placement, kills, matched_tag, team_name,
 //    player_count, match_count, disqualified }]
 
-function matchTeamsToSlots(ocrTeams, registeredSlots) {
-  const results  = [];
+function matchTeamsToSlots(ocrTeams, registeredSlots, rawText = '') {
+  const results   = [];
   const usedSlots = new Set(); // prevent same slot being written twice
 
+  // ── Pass 1: match OCR segments → registered slots ────────────────────────
   for (const ocrTeam of ocrTeams) {
     const { placement, players } = ocrTeam;
     const totalKills  = players.reduce((s, p) => s + p.kills, 0);
@@ -415,7 +534,81 @@ function matchTeamsToSlots(ocrTeams, registeredSlots) {
       player_count: playerCount,
       match_count:  matchCount,
       disqualified: playerCount < 2,
+      rescued:      false,
     });
+  }
+
+  // ── Pass 2: rescue unmatched registered teams from raw OCR text ───────────
+  // Every registered team was in the match. If segment parsing missed them
+  // (bad boundary detection, interleaving, etc.) we scan the raw OCR lines
+  // directly for any line that contains their tag, collect kills, and write
+  // them with placement=0 (unknown) so the sheet still gets their kill data.
+  if (rawText) {
+    const elimRe  = /^(.+?)\s+(\d+)\s+eliminations?$/i;
+    const killsRe = /^(\d+)\s+eliminations?$/i;
+
+    function normalizeOCR(str) {
+      return str.toLowerCase()
+        .replace(/^[il](?=\d)/, '1')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    }
+
+    const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+
+    // Build a deduplicated map of playerName → kills from the raw text
+    // (handles duplicate OCR pages — same player appears on multiple scroll pages)
+    const allPlayersMap = new Map(); // normalizedName → { name, kills }
+    for (const line of lines) {
+      const em = elimRe.exec(line);
+      if (em) {
+        const key = normalizeOCR(em[1].trim());
+        if (!allPlayersMap.has(key)) {
+          allPlayersMap.set(key, { name: em[1].trim(), kills: parseInt(em[2]) });
+        }
+      }
+    }
+
+    for (const slot of registeredSlots) {
+      if (!slot.team_tag || usedSlots.has(slot.lobby_slot)) continue;
+
+      const tag = normalizeOCR(slot.team_tag);
+
+      // Find all players in raw OCR whose name starts with this tag
+      const tagPlayers = [...allPlayersMap.values()].filter(p =>
+        normalizeOCR(p.name).startsWith(tag)
+      );
+
+      if (tagPlayers.length === 0) continue; // truly not found in OCR at all
+
+      const totalKills  = tagPlayers.reduce((s, p) => s + p.kills, 0);
+      const playerCount = tagPlayers.length;
+
+      // Try to find which OCR segment these players came from to recover placement
+      // Look for an ocrTeam that contains at least one of these players
+      let recoveredPlacement = 0;
+      for (const ocrTeam of ocrTeams) {
+        const found = ocrTeam.players.some(p =>
+          normalizeOCR(p.name).startsWith(tag)
+        );
+        if (found && ocrTeam.placement > 0) {
+          recoveredPlacement = ocrTeam.placement;
+          break;
+        }
+      }
+
+      usedSlots.add(slot.lobby_slot);
+      results.push({
+        lobby_slot:   slot.lobby_slot,
+        placement:    recoveredPlacement,
+        kills:        playerCount >= 2 ? totalKills : 0,
+        matched_tag:  slot.team_tag,
+        team_name:    slot.team_name,
+        player_count: playerCount,
+        match_count:  tagPlayers.length,
+        disqualified: playerCount < 2,
+        rescued:      true, // flag: found via raw scan, not clean segment
+      });
+    }
   }
 
   return results;
@@ -509,8 +702,8 @@ async function handleMatchResultMessage(message) {
       throw new Error('Could not extract any team data from the screenshot. Make sure the image shows the full results screen.');
     }
 
-    // 5. Match OCR teams → registered slots
-    const matchedResults = matchTeamsToSlots(ocrTeams, lobbySlots);
+    // 5. Match OCR teams → registered slots (+ raw-text rescue pass)
+    const matchedResults = matchTeamsToSlots(ocrTeams, lobbySlots, rawText);
 
     if (matchedResults.length === 0) {
       // Show what OCR found so admin can debug
@@ -535,39 +728,43 @@ async function handleMatchResultMessage(message) {
     );
 
     // 7. Build confirmation embed
-    const matched    = matchedResults.filter(r => !r.disqualified);
-    const disqualified = matchedResults.filter(r => r.disqualified);
-    const unmatched  = ocrTeams.length - matchedResults.length;
+    const matched       = matchedResults.filter(r => !r.disqualified);
+    const disqualified  = matchedResults.filter(r => r.disqualified);
+    const rescued       = matchedResults.filter(r => r.rescued);
+    // Truly unmatched = registered slots with no OCR data at all
+    const matchedSlots  = new Set(matchedResults.map(r => r.lobby_slot));
+    const trulyUnmatched = lobbySlots.filter(s => !matchedSlots.has(s.lobby_slot));
 
-    // Debug: log which OCR teams failed to match
-    if (unmatched > 0) {
-      const matchedPlacements = new Set(matchedResults.map(r => r.placement));
-      const unmatchedTeams = ocrTeams.filter(t => !matchedPlacements.has(t.placement));
-      unmatchedTeams.forEach(t => {
-        const names = t.players.map(p => p.name).join(', ');
-        console.log(`[matchResult] Unmatched OCR team #${t.placement}: ${names}`);
-      });
-    }
-
-    // Sort by placement for display
-    const sorted = [...matchedResults].sort((a, b) => a.placement - b.placement);
+    // Sort by placement for display (placement 0 = unknown, goes at end)
+    const sorted = [...matchedResults].sort((a, b) => {
+      if (a.placement === 0 && b.placement === 0) return 0;
+      if (a.placement === 0) return 1;
+      if (b.placement === 0) return -1;
+      return a.placement - b.placement;
+    });
     const medals = ['🥇', '🥈', '🥉'];
 
-    const rows = sorted.map((r, i) => {
-      const medal = medals[r.placement - 1] || `#${r.placement}`;
+    const rows = sorted.map((r) => {
+      const placementStr = r.placement > 0 ? (medals[r.placement - 1] || `#${r.placement}`) : `#?`;
       const dq    = r.disqualified ? ' *(< 2 players — 0 kills)*' : '';
-        const sub = r.match_count < r.player_count ? ` *(${r.match_count}/${r.player_count} tag match)*` : '';
-      return `${medal} **[${r.matched_tag}]** ${r.team_name} — ${r.kills} kills${dq}${sub}`;
+      const sub   = r.match_count < r.player_count ? ` *(${r.match_count}/${r.player_count} tag match)*` : '';
+      const flag  = r.rescued ? ' ⚠️' : '';
+      return `${placementStr} **[${r.matched_tag}]** ${r.team_name} — ${r.kills} kills${dq}${sub}${flag}`;
     }).join('\n');
 
+    // List truly unmatched teams (not found in OCR at all)
+    const unmatchedNote = trulyUnmatched.length > 0
+      ? '\n\n**❌ Not found in OCR:**\n' + trulyUnmatched.map(s => `• [${s.team_tag}] ${s.team_name}`).join('\n')
+      : '';
+
     const embed = new (require('discord.js').EmbedBuilder)()
-      .setColor(disqualified.length > 0 ? 0xFFAA00 : 0x00FF7F)
+      .setColor(trulyUnmatched.length > 0 ? 0xFF4444 : disqualified.length > 0 ? 0xFFAA00 : 0x00FF7F)
       .setTitle(`✅ Lobby ${lobbyLetter} — Match ${matchNumber} Written`)
-      .setDescription(rows || 'No results.')
+      .setDescription((rows || 'No results.') + unmatchedNote)
       .addFields(
-        { name: '📊 Teams written',   value: `${matchedResults.length}`, inline: true },
-        { name: '⚠️ Disqualified',    value: `${disqualified.length} (< 2 players)`, inline: true },
-        { name: '❓ Unmatched (OCR)', value: `${unmatched}`, inline: true },
+        { name: '📊 Teams written',        value: `${matchedResults.length}`, inline: true },
+        { name: '⚠️ Rescued (raw scan)',   value: `${rescued.length}`,        inline: true },
+        { name: '❌ Not found in OCR',     value: `${trulyUnmatched.length}`, inline: true },
       )
       .setFooter({ text: `Sheet updated · ${new Date().toLocaleTimeString()}` })
       .setTimestamp();
