@@ -190,137 +190,133 @@ function downloadImage(urlStr) {
 // We find the longest common prefix of all player names in the group,
 // then compare it case-insensitively against registered team tags.
 
-
-function parseOCRText(rawText, registeredTags = []) {
-  // Normalize common OCR misreads + OCR symbol artifacts
+function parseOCRText(rawText) {
+  // ── Step 1: Normalize OCR artifacts ──────────────────────────────────────
   const normalized = rawText
-    .replace(/\bO\b(?=\s+eliminations?)/gi, '0')
-    .replace(/\bI\b(?=\s+eliminations?)/g,  '1')
-    .replace(/\bDel?i?m?i?nations?\b/gi, '0 eliminations')
-    .replace(/\b(\d)\s*elim\b/gi, '$1 eliminations')
-    // Normalize arrow/dash separators OCR reads between tag and name (NBA→CAPTAIN, NBA-CAPTAIN)
-    .replace(/([A-Za-z0-9])[→—–-]([A-Za-z])/g, '$1$2');
+    // Strip accents/diacritics early: aès→aes, ŁOKI→LOKI
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    // Superscript digits/letters appended to names: wargod¹ → wargod1, m¹KING → m1KING
+    .replace(/[\u00B9\u00B2\u00B3\u2070-\u2079]/g, d => String.fromCharCode('0'.charCodeAt(0) + '\u2070\u00B9\u00B2\u00B3\u2074\u2075\u2076\u2077\u2078\u2079'.indexOf(d)))
+    // Normalize all tag separators to a single space:
+    //   GX\CeeOl → GX CeeOl, x9G·JOOTA → x9G JOOTA, Sh→TAAKEYE → Sh TAAKEYE
+    //   TRT×name → TRT name, NVX|704 → NVX 704, APEX✗LUNNA → APEX LUNNA
+    .replace(/[\\\u00B7\u2022\u2192\u2193\u00D7\u00D7\xD7\u2715\u2716|]+/g, ' ')
+    // Kill-count normalizations
+    .replace(/\bDal?[oi]m[oi]?nations?\b/gi, '0 eliminations')
+    .replace(/\bDel?[oi]m[oi]?nations?\b/gi, '0 eliminations')
+    .replace(/\b([Ol])\b(?=\s+eliminations?)/gi, '0')
+    .replace(/\bI\b(?=\s+elimination)/g, '1')
+    .replace(/\b(\d)\s*elims?\b/gi, '$1 eliminations')
+    // Strip non-latin non-digit chars that appear inside names (Korean, Chinese, symbols)
+    // but KEEP the rest of the name intact — just strip the exotic char
+    .replace(/[^\x00-\x7F\u00C0-\u024F\s]/g, '');
 
+  // ── Step 2: Tokenize ───────────────────────────────────────────────────────
   const lines = normalized
     .split('\n')
     .map(l => l.trim())
+    // Collapse internal multiple spaces (e.g. "S K Y R A" → "SKYRA" handled below)
     .filter(Boolean);
 
-  const teams  = [];
-  let current  = null;
-
-  const elimRe      = /^(.+?)\s+(\d+)\s+eliminations?$/i;
-  const killsOnlyRe = /^(\d+)\s+eliminations?$/i;
-  const placeRe     = /^(\d{1,2})$/;
+  // ── Step 3: Regex patterns ─────────────────────────────────────────────────
   const noiseRe     = /^(PUBG|MOBILE|Continue)$/i;
-  const junkRe      = /^(SQUAD|SOLO|DUO|TEAM|LOBBY|MATCH|RESULT)/i;
-  const scoreRe     = /^\d{3,}$/; // 3+ digit numbers (190, 200, 210) are scores not placements
+  const junkRe      = /^(SQUAD|SOLO|DUO|LOBBY|MATCH|RESULT)$/i;
+  const elimRe      = /^(.+?)\s+(\d+)\s+eliminations?$/i;   // "name N eliminations"
+  const killsOnlyRe = /^(\d+)\s+eliminations?$/i;            // "N eliminations"
+  const pureNumRe   = /^(\d{1,2})$/;                         // bare 1-25
+  // "9 TB HAIDER" — digit(s) then space then non-digit text
+  const gluedRe     = /^(\d{1,2})\s+([^\d].*)$/;
+  // Spaced-letter names like "S K Y R A" — all single chars separated by spaces
+  const spacedLettersRe = /^([A-Za-z0-9] ){2,}[A-Za-z0-9]$/;
 
-  // Track which placements we've already seen to avoid duplicates
-  const seenPlacements = new Set();
+  // ── Step 4: Build segments (one per placement) ────────────────────────────
+  const segments = [];
+  let seg = null;
 
-  // Helper: flush current team
-  function flushTeam() {
-    if (!current) return;
-    const { placement, names, kills } = current;
-    const players = [];
-    const count = Math.max(names.length, kills.length);
-    for (let i = 0; i < count; i++) {
-      const name = names[i];
-      const k    = kills[i] ?? 0;
-      if (name && name.length >= 2 && !junkRe.test(name)) {
-        players.push({ name, kills: k });
-      }
-    }
-    if (players.length > 0) teams.push({ placement, players });
-    current = null;
+  function flushSeg() {
+    if (seg && (seg.nameLines.length || seg.killLines.length)) segments.push(seg);
   }
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const rawLine of lines) {
+    // Collapse spaced-letter names before anything else: "S K Y R A" → "SKYRA"
+    const line = spacedLettersRe.test(rawLine)
+      ? rawLine.replace(/\s+/g, '')
+      : rawLine;
+
     if (noiseRe.test(line)) continue;
 
-    // Skip 3+ digit score numbers (190, 200, 210 etc.)
-    if (scoreRe.test(line)) continue;
-
-    // Check if line is a bare placement number (1-25)
-    const placeMatch = placeRe.exec(line);
-    if (placeMatch) {
-      const p = parseInt(placeMatch[1]);
-      if (p >= 1 && p <= 25 && !seenPlacements.has(p)) {
-        // Look ahead: is the next non-empty line a player name (not kills-only or another number)?
-        // This confirms this number is a placement, not a stray number mid-team.
-        const nextLine = lines.slice(i + 1).find(l => l.trim().length > 0);
-        const nextIsKillsOnly = nextLine && killsOnlyRe.test(nextLine);
-        const nextIsScore = nextLine && scoreRe.test(nextLine);
-        const nextIsPlacement = nextLine && placeRe.test(nextLine) &&
-          parseInt(nextLine) >= 1 && parseInt(nextLine) <= 25;
-
-        if (!nextIsKillsOnly && !nextIsScore && !nextIsPlacement) {
-          flushTeam();
-          seenPlacements.add(p);
-          current = { placement: p, names: [], kills: [] };
-          continue;
-        }
-      }
-      // Not a valid placement — skip this bare number
-      continue;
-    }
-
-    // "9 TB HAIDER" — placement number glued to player name on same line
-    const gluedPlaceRe = /^(\d{1,2})\s+(.+)$/;
-    const gluedMatch = gluedPlaceRe.exec(line);
-    if (gluedMatch) {
-      const p = parseInt(gluedMatch[1]);
-      const rest = gluedMatch[2].trim();
-      if (p >= 1 && p <= 25 && !seenPlacements.has(p) &&
-          !/^\d+$/.test(rest) && !killsOnlyRe.test(line)) {
-        flushTeam();
-        seenPlacements.add(p);
-        current = { placement: p, names: [rest], kills: [] };
-        continue;
-      }
-      // Fall through to name handling
-    }
-
-    // If no team started yet and this looks like a player name, it's placement 1 (champion panel)
-    if (!current) {
-      if (line.length >= 2 && !/^\d+$/.test(line) && !junkRe.test(line)) {
-        seenPlacements.add(1);
-        current = { placement: 1, names: [], kills: [] };
-        // Fall through to process this line as a player name below
-      } else {
-        continue;
-      }
-    }
-
-    // Full "name N eliminations" on one line
-    const elimMatch = elimRe.exec(line);
-    if (elimMatch) {
-      const playerName = elimMatch[1].trim();
-      if (!junkRe.test(playerName) && playerName.length >= 2) {
-        current.names.push(playerName);
-        current.kills.push(parseInt(elimMatch[2]));
-      }
-      continue;
-    }
-
-    // Kills-only line
+    // Kill-only line — always goes to current segment
     const killsOnly = killsOnlyRe.exec(line);
     if (killsOnly) {
-      current.kills.push(parseInt(killsOnly[1]));
+      if (seg) seg.killLines.push(parseInt(killsOnly[1]));
       continue;
     }
 
-    // Junk UI label
+    // Full "name N eliminations" inline
+    const elimMatch = elimRe.exec(line);
+    if (elimMatch) {
+      const name = elimMatch[1].trim();
+      const kills = parseInt(elimMatch[2]);
+      if (seg && name.length >= 2 && !junkRe.test(name)) {
+        seg.nameLines.push(name);
+        seg.killLines.push(kills);
+      }
+      continue;
+    }
+
+    // Bare placement number — highest priority boundary marker
+    const pureNum = pureNumRe.exec(line);
+    if (pureNum) {
+      const p = parseInt(pureNum[1]);
+      if (p >= 1 && p <= 25) {
+        flushSeg();
+        seg = { placement: p, nameLines: [], killLines: [] };
+        continue;
+      }
+      // Not 1-25 (e.g. score 200) — skip
+      continue;
+    }
+
+    // "9 TB HAIDER" — placement glued to first player name on same line
+    const glued = gluedRe.exec(line);
+    if (glued) {
+      const p = parseInt(glued[1]);
+      const name = glued[2].trim();
+      if (p >= 1 && p <= 25 && name.length >= 2) {
+        flushSeg();
+        seg = { placement: p, nameLines: [name], killLines: [] };
+        continue;
+      }
+    }
+
+    // Junk UI labels
     if (junkRe.test(line)) continue;
 
-    // Anything else that looks like a name
-    if (line.length >= 2 && !/^\d+$/.test(line)) {
-      current.names.push(line);
+    // Plain player name
+    if (seg && line.length >= 2) {
+      seg.nameLines.push(line);
     }
   }
-  flushTeam();
+  flushSeg();
+
+  // ── Step 5: Segments → teams, deduplicate by placement ────────────────────
+  const teams = [];
+  const seenPlacements = new Set();
+
+  for (const s of segments) {
+    if (seenPlacements.has(s.placement)) continue;
+    const players = [];
+    const count = Math.max(s.nameLines.length, s.killLines.length);
+    for (let i = 0; i < count; i++) {
+      const name  = s.nameLines[i];
+      const kills = s.killLines[i] ?? 0;
+      if (name && name.length >= 2) players.push({ name, kills });
+    }
+    if (players.length > 0) {
+      seenPlacements.add(s.placement);
+      teams.push({ placement: s.placement, players });
+    }
+  }
 
   return teams;
 }
@@ -333,33 +329,48 @@ function parseOCRText(rawText, registeredTags = []) {
 // This handles stand-ins or players with differently-prefixed names.
 
 function detectTagByMajority(players, registeredSlots) {
-  // Normalize OCR misreads
+  // Normalize an OCR-read player name for tag prefix matching.
+  // Strips everything non-alphanumeric so separators (space, dot, arrow, backslash,
+  // superscript digits, etc.) don't break the startsWith check.
   function normalizeOCR(str) {
-    return str.toLowerCase()
-      .replace(/^[il](?=\d)/, '1')           // "Itke" → "1tke"
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // strip accents: "aès" → "aes"
+    return str
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // accents: aès→aes
+      .replace(/[\u00B9\u00B2\u00B3\u2070-\u2079]/g, d => // superscripts: ¹→1
+        String.fromCharCode('0'.charCodeAt(0) + '\u2070\u00B9\u00B2\u00B3\u2074\u2075\u2076\u2077\u2078\u2079'.indexOf(d)))
+      .replace(/[^\x00-\x7F\u00C0-\u024F]/g, '')          // strip CJK/symbols
+      .toLowerCase()
+      .replace(/^[il](?=[a-z0-9])/, '1')                    // leading I/l misread: Itke→1tke, ITE→1te
+      .replace(/^aes(?=[a-z0-9])/i, 'aes')                // keep aes prefix before stripping
+      .replace(/[^a-z0-9]/g, '');                          // strip all punctuation/spaces
   }
 
-  const names = players.map(p => normalizeOCR(p.name));
+  // Normalize a registered tag the same way
+  function normalizeTag(str) {
+    return str
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+  }
 
-  let bestTag   = null;
+  const normalizedNames = players.map(p => normalizeOCR(p.name));
+
   let bestSlot  = null;
   let bestCount = 0;
 
   for (const slot of registeredSlots) {
     if (!slot.lobby || !slot.team_tag) continue;
-    const tag   = slot.team_tag.toLowerCase();
-    const count = names.filter(n => n.startsWith(tag)).length;
-    // Need at least 1 matching player, and must beat current best
+    const tag   = normalizeTag(slot.team_tag);
+    if (!tag) continue;
+    const count = normalizedNames.filter(n => n.startsWith(tag)).length;
     if (count >= 1 && count > bestCount) {
       bestCount = count;
-      bestTag   = tag;
       bestSlot  = slot;
     }
   }
 
-  return { slot: bestSlot, matchCount: bestCount, tag: bestTag };
+  return { slot: bestSlot, matchCount: bestCount, tag: bestSlot ? bestSlot.team_tag : null };
 }
+
 
 // ── Match OCR teams → registered slots ──────────────────────────────────────────────
 // For each OCR team, use majority vote across all registered tags to find
@@ -465,38 +476,42 @@ async function handleMatchResultMessage(message) {
         return await runVision(buf);
       })
     );
-    const rawText = ocrParts.filter(Boolean).join('\n');
-    if (!rawText) throw new Error('Vision API returned no text. Is the Vision API enabled in your Google Cloud project?');
+    if (!ocrParts.some(Boolean)) throw new Error('Vision API returned no text. Is the Vision API enabled in your Google Cloud project?');
 
-    console.log(`[matchResult] Raw OCR text for ${lobbyLetter}${matchNumber}:\n${rawText}`);
+    // Parse each screenshot independently then merge — avoids cross-screenshot bleeding
+    const allTeams = [];
+    const seenPlacements = new Set();
+    for (const part of ocrParts) {
+      if (!part) continue;
+      console.log(`[matchResult] Raw OCR text for ${lobbyLetter}${matchNumber}:\n${part}`);
+      const teamsFromPage = parseOCRText(part);
+      for (const t of teamsFromPage) {
+        if (!seenPlacements.has(t.placement)) {
+          seenPlacements.add(t.placement);
+          allTeams.push(t);
+        }
+      }
+    }
+    const rawText = ocrParts.filter(Boolean).join('\n'); // kept for error message only
 
-    // 3. Get registered teams for this lobby (needed before parsing for tag-aware detection)
-    const data       = getRegistrations(guildId, sessionId);
+    if (allTeams.length === 0) {
+      throw new Error('Could not extract any team data from the screenshots. Make sure the images show the full results screen.');
+    }
+
+    // 4. Get registered teams for this lobby
+    const data      = getRegistrations(guildId, sessionId);
     const lobbySlots = data.slots.filter(t => t.lobby === lobbyLetter && t.lobby_slot);
 
     if (lobbySlots.length === 0) {
       throw new Error(`No teams are assigned to Lobby ${lobbyLetter}. Assign teams first using team card reactions.`);
     }
 
-    console.log(`[matchResult] Lobby ${lobbyLetter}: ${lobbySlots.length} registered slots — tags: ${lobbySlots.map(s => s.team_tag).join(', ')}`);
-
-    // 4. Parse OCR → teams (pass registered tags for smarter boundary detection)
-    const registeredTags = lobbySlots
-      .filter(s => s.team_tag)
-      .map(s => s.team_tag.toLowerCase()
-        .replace(/^[il](?=\d)/, '1')
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
-    const ocrTeams = parseOCRText(rawText, registeredTags);
-    if (ocrTeams.length === 0) {
-      throw new Error('Could not extract any team data from the screenshot. Make sure the image shows the full results screen.');
-    }
-
     // 5. Match OCR teams → registered slots
-    const matchedResults = matchTeamsToSlots(ocrTeams, lobbySlots);
+    const matchedResults = matchTeamsToSlots(allTeams, lobbySlots);
 
     if (matchedResults.length === 0) {
       // Show what OCR found so admin can debug
-      const ocrSummary = ocrTeams.slice(0, 8).map(t => {
+      const ocrSummary = allTeams.slice(0, 8).map(t => {
         const prefix = commonPrefix(t.players.map(p => p.name));
         return `P${t.placement}: \`${prefix || '?'}\` (${t.players.length} players)`;
       }).join('\n');
@@ -519,17 +534,7 @@ async function handleMatchResultMessage(message) {
     // 7. Build confirmation embed
     const matched    = matchedResults.filter(r => !r.disqualified);
     const disqualified = matchedResults.filter(r => r.disqualified);
-    const unmatched  = ocrTeams.length - matchedResults.length;
-
-    // Debug: log which OCR teams failed to match
-    if (unmatched > 0) {
-      const matchedPlacements = new Set(matchedResults.map(r => r.placement));
-      const unmatchedTeams = ocrTeams.filter(t => !matchedPlacements.has(t.placement));
-      unmatchedTeams.forEach(t => {
-        const names = t.players.map(p => p.name).join(', ');
-        console.log(`[matchResult] Unmatched OCR team #${t.placement}: ${names}`);
-      });
-    }
+    const unmatched  = allTeams.length - matchedResults.length;
 
     // Sort by placement for display
     const sorted = [...matchedResults].sort((a, b) => a.placement - b.placement);
