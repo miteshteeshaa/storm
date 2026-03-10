@@ -349,13 +349,20 @@ function parseOCRText(rawText, registeredTags = []) {
   // to a tag cluster, then emit a separate team for each cluster with 2+ members.
 
   function playerMatchesTag(playerName, tag) {
-    // Case-insensitive, accent-stripped, tag can appear anywhere in the name
+    // Case-insensitive, accent-stripped, tag can appear anywhere in the name.
+    // Short tags (≤3 chars) must match at a word boundary to avoid false positives
+    // e.g. tag "77" should NOT match "BEAST77", but "XEL" should match "XEL FATAL".
     const n = playerName.toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/^[il](?=\d)/, '1');
     const t = tag.toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/^[il](?=\d)/, '1');
+    if (t.length <= 3) {
+      // Must appear at start, end, or surrounded by non-alphanumeric chars
+      const re = new RegExp(`(^|[^a-z0-9])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
+      return re.test(n);
+    }
     return n.includes(t);
   }
 
@@ -469,6 +476,29 @@ function parseOCRText(rawText, registeredTags = []) {
 // The tag with the most matching players wins, as long as >= 2 players match it.
 // This handles stand-ins or players with differently-prefixed names.
 
+function tagMatchesName(playerName, tag) {
+  // Shared tag-matching: case-insensitive, accent-stripped.
+  // Short tags (≤3 chars) require either:
+  //   - match at the start or end of the name (glued prefix/suffix like "rgeEKLAVYAA", "DEKU-TGB")
+  //   - OR surrounded by non-alphanumeric chars (standalone like "77 KING")
+  // This prevents "77" matching "BEAST77" while still matching "rge" in "rgeEKLAVYAA".
+  function norm(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/^[il](?=\d)/, '1');
+  }
+  const n = norm(playerName);
+  const t = norm(tag);
+  if (t.length <= 3) {
+    // Allow at start or end of string (glued tag), or surrounded by non-alphanumeric
+    const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Tag at the very start of name = prefix tag (rgeEKLAVYAA, SRMASTER, vpeSPRYZEN)
+    if (n.startsWith(t)) return true;
+    // Tag elsewhere must be surrounded by non-alphanumeric on both sides (DEKU-TGB, XKS SPIRIT, 77 KING)
+    const re = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`);
+    return re.test(n);
+  }
+  return n.includes(t);
+}
+
 function detectTagByMajority(players, registeredSlots) {
   // Normalize OCR misreads
   function normalizeOCR(str) {
@@ -486,7 +516,7 @@ function detectTagByMajority(players, registeredSlots) {
   for (const slot of registeredSlots) {
     if (!slot.lobby || !slot.team_tag) continue;
     const tag   = slot.team_tag.toLowerCase();
-    const count = names.filter(n => n.includes(tag)).length;
+    const count = names.filter(n => tagMatchesName(n, tag)).length;
     // Need at least 1 matching player, and must beat current best
     if (count >= 1 && count > bestCount) {
       bestCount = count;
@@ -576,7 +606,7 @@ function matchTeamsToSlots(ocrTeams, registeredSlots, rawText = '') {
 
       // Find all players in raw OCR whose name contains this tag (prefix or suffix)
       const tagPlayers = [...allPlayersMap.values()].filter(p =>
-        normalizeOCR(p.name).includes(tag)
+        tagMatchesName(p.name, tag)
       );
 
       if (tagPlayers.length === 0) continue; // truly not found in OCR at all
@@ -726,7 +756,7 @@ async function handleMatchResultMessage(message) {
         let count = 0;
         for (const page of ocrParts) {
           if (!page) continue;
-          if (normTag(page).includes(tag)) count++;
+          if (tagMatchesName(page, tag)) count++;
         }
         tagPageCount.set(slot.team_tag, count);
       }
