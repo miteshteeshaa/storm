@@ -349,13 +349,14 @@ function parseOCRText(rawText, registeredTags = []) {
   // to a tag cluster, then emit a separate team for each cluster with 2+ members.
 
   function playerMatchesTag(playerName, tag) {
+    // Case-insensitive, accent-stripped, tag can appear anywhere in the name
     const n = playerName.toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/^[il](?=\d)/, '1');
     const t = tag.toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/^[il](?=\d)/, '1');
-    return n.startsWith(t);
+    return n.includes(t);
   }
 
   const expandedTeams = [];
@@ -407,7 +408,7 @@ function parseOCRText(rawText, registeredTags = []) {
 
     for (let ci = 0; ci < validGroups.length; ci++) {
       const [, ps] = validGroups[ci];
-      expandedTeams.push({ placement: ci === 0 ? team.placement : 0, players: ps });
+      expandedTeams.push({ placement: ci === 0 ? team.placement : null, players: ps });
     }
 
     // Orphan players: append to whichever valid group has the closest tag
@@ -485,7 +486,7 @@ function detectTagByMajority(players, registeredSlots) {
   for (const slot of registeredSlots) {
     if (!slot.lobby || !slot.team_tag) continue;
     const tag   = slot.team_tag.toLowerCase();
-    const count = names.filter(n => n.startsWith(tag)).length;
+    const count = names.filter(n => n.includes(tag)).length;
     // Need at least 1 matching player, and must beat current best
     if (count >= 1 && count > bestCount) {
       bestCount = count;
@@ -573,9 +574,9 @@ function matchTeamsToSlots(ocrTeams, registeredSlots, rawText = '') {
 
       const tag = normalizeOCR(slot.team_tag);
 
-      // Find all players in raw OCR whose name starts with this tag
+      // Find all players in raw OCR whose name contains this tag (prefix or suffix)
       const tagPlayers = [...allPlayersMap.values()].filter(p =>
-        normalizeOCR(p.name).startsWith(tag)
+        normalizeOCR(p.name).includes(tag)
       );
 
       if (tagPlayers.length === 0) continue; // truly not found in OCR at all
@@ -584,15 +585,21 @@ function matchTeamsToSlots(ocrTeams, registeredSlots, rawText = '') {
       const playerCount = tagPlayers.length;
 
       // Try to find which OCR segment these players came from to recover placement
-      // Look for an ocrTeam that contains at least one of these players
-      let recoveredPlacement = 0;
-      for (const ocrTeam of ocrTeams) {
-        const found = ocrTeam.players.some(p =>
-          normalizeOCR(p.name).startsWith(tag)
-        );
-        if (found && ocrTeam.placement > 0) {
-          recoveredPlacement = ocrTeam.placement;
-          break;
+      // If this team was identified as the champion, force placement 1
+      let recoveredPlacement = null;
+      const championEntry = ocrTeams.find(t => t._championTag &&
+        normalizeOCR(t._championTag) === tag);
+      if (championEntry) {
+        recoveredPlacement = 1;
+      } else {
+        for (const ocrTeam of ocrTeams) {
+          const found = ocrTeam.players.some(p =>
+            normalizeOCR(p.name).includes(tag)
+          );
+          if (found && ocrTeam.placement != null) {
+            recoveredPlacement = ocrTeam.placement;
+            break;
+          }
         }
       }
 
@@ -669,7 +676,7 @@ async function handleMatchResultMessage(message) {
   const processingMsg = await message.reply({ content: `⏳ Processing **Lobby ${lobbyLetter} — Match ${matchNumber}** (${imageAttachments.length} screenshot${imageAttachments.length > 1 ? 's' : ''})...` });
 
   try {
-    // 1. Download + OCR all images, concatenate text
+    // 1. Download + OCR all images, keeping per-page text separate
     const ocrParts = await Promise.all(
       imageAttachments.map(async (att) => {
         const buf = await downloadImage(att.url);
@@ -700,6 +707,46 @@ async function handleMatchResultMessage(message) {
     const ocrTeams = parseOCRText(rawText, registeredTags);
     if (ocrTeams.length === 0) {
       throw new Error('Could not extract any team data from the screenshot. Make sure the image shows the full results screen.');
+    }
+
+    // 4b. Champion detection: the #1 team's players appear in the persistent left panel
+    // on EVERY scroll page, so their tag shows up in more OCR pages than anyone else.
+    // If no team was parsed as placement 1, find the registered tag that appears in
+    // the most separate OCR pages and force it to placement 1.
+    const hasPlacement1 = ocrTeams.some(t => t.placement === 1);
+    if (!hasPlacement1 && ocrParts.length > 1) {
+      function normTag(s) {
+        return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/^[il](?=\d)/, '1');
+      }
+      // Count how many pages each registered tag appears in
+      const tagPageCount = new Map();
+      for (const slot of lobbySlots) {
+        if (!slot.team_tag) continue;
+        const tag = normTag(slot.team_tag);
+        let count = 0;
+        for (const page of ocrParts) {
+          if (!page) continue;
+          if (normTag(page).includes(tag)) count++;
+        }
+        tagPageCount.set(slot.team_tag, count);
+      }
+      // The tag appearing in the most pages is the champion
+      const sorted = [...tagPageCount.entries()].sort((a, b) => b[1] - a[1]);
+      const [championTag, pageCount] = sorted[0] || [];
+      // Only apply if it appears in majority of pages (>= half) — avoids false positives
+      if (championTag && pageCount >= Math.ceil(ocrParts.filter(Boolean).length / 2)) {
+        console.log(`[matchResult] Champion detected via page-frequency: ${championTag} (${pageCount}/${ocrParts.filter(Boolean).length} pages)`);
+        // If this team already exists in ocrTeams with wrong/null placement, fix it
+        const existing = ocrTeams.find(t => {
+          return t.players.some(p => normTag(p.name).includes(normTag(championTag)));
+        });
+        if (existing) {
+          existing.placement = 1;
+        } else {
+          // Build a minimal entry so Pass 2 raw scan picks it up with placement 1
+          ocrTeams.unshift({ placement: 1, players: [], _championTag: championTag });
+        }
+      }
     }
 
     // 5. Match OCR teams → registered slots (+ raw-text rescue pass)
@@ -737,15 +784,15 @@ async function handleMatchResultMessage(message) {
 
     // Sort by placement for display (placement 0 = unknown, goes at end)
     const sorted = [...matchedResults].sort((a, b) => {
-      if (a.placement === 0 && b.placement === 0) return 0;
-      if (a.placement === 0) return 1;
-      if (b.placement === 0) return -1;
+      if (a.placement == null && b.placement == null) return 0;
+      if (a.placement == null) return 1;
+      if (b.placement == null) return -1;
       return a.placement - b.placement;
     });
     const medals = ['🥇', '🥈', '🥉'];
 
     const rows = sorted.map((r) => {
-      const placementStr = r.placement > 0 ? (medals[r.placement - 1] || `#${r.placement}`) : `#?`;
+      const placementStr = r.placement != null ? (medals[r.placement - 1] || `#${r.placement}`) : `#?`;
       const dq    = r.disqualified ? ' *(< 2 players — 0 kills)*' : '';
       const sub   = r.match_count < r.player_count ? ` *(${r.match_count}/${r.player_count} tag match)*` : '';
       const flag  = r.rescued ? ' ⚠️' : '';
