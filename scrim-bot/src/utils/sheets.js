@@ -503,7 +503,7 @@ async function syncTeamsToSheet(spreadsheetId, slots, slotsPerLobby = 24, firstS
 
 // ------ Clear team names AND all match data from specific lobby tab(s), or all tabs
 // lobbyLetters: array like ['A'] or null = clear all
-async function clearTeamsFromSheet(spreadsheetId, slotsPerLobby = 24, lobbyLetters = null) {
+async function clearTeamsFromSheet(spreadsheetId, slotsPerLobby = 25, lobbyLetters = null) {
   if (!spreadsheetId) return;
 
   const auth   = getAuth();
@@ -519,17 +519,20 @@ async function clearTeamsFromSheet(spreadsheetId, slotsPerLobby = 24, lobbyLette
 
   if (lobbySheets.length === 0) return;
 
-  const emptyCol = Array.from({ length: slotsPerLobby }, () => ['']);
-
   // For match data we need to know how many match columns exist --- read the header row
   for (const sheet of lobbySheets) {
     const t = sheet.properties.title;
     const updateData = [];
 
+    // Use actual row count from sheet metadata to avoid missing last slots
+    const actualRows = (sheet.properties.gridProperties?.rowCount || 100) - 2; // minus 2 header rows
+    const clearRows  = Math.max(slotsPerLobby, actualRows > 2 ? Math.min(actualRows, 50) : slotsPerLobby);
+    const emptyCol   = Array.from({ length: clearRows }, () => ['']);
+
     // Clear team name (E) and tag (F)
     updateData.push(
-      { range: `${t}!E3:E${2 + slotsPerLobby}`, values: emptyCol },
-      { range: `${t}!F3:F${2 + slotsPerLobby}`, values: emptyCol },
+      { range: `${t}!E3:E${2 + clearRows}`, values: emptyCol },
+      { range: `${t}!F3:F${2 + clearRows}`, values: emptyCol },
     );
 
     // Detect how many match columns exist by reading row 1 from G onwards
@@ -548,9 +551,9 @@ async function clearTeamsFromSheet(spreadsheetId, slotsPerLobby = 24, lobbyLette
         const lastMatchColIdx = 6 + numMatches * 2 - 1; // 0-based, G=6
         const lastMatchCol = colLetter(lastMatchColIdx);
         const emptyMatchRow = Array.from({ length: numMatches * 2 }, () => '');
-        const emptyMatchData = Array.from({ length: slotsPerLobby }, () => [...emptyMatchRow]);
+        const emptyMatchData = Array.from({ length: clearRows }, () => [...emptyMatchRow]);
         updateData.push({
-          range: `${t}!${firstMatchCol}3:${lastMatchCol}${2 + slotsPerLobby}`,
+          range: `${t}!${firstMatchCol}3:${lastMatchCol}${2 + clearRows}`,
           values: emptyMatchData,
         });
       }
