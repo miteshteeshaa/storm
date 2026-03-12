@@ -21,18 +21,25 @@ async function purgeChannel(guild, channelId) {
     if (!ch?.isTextBased()) return 0;
     let deleted = 0;
 
-    // Keep fetching and bulk-deleting until channel is empty
+    // Paginate all messages first, then bulk-delete each page simultaneously
+    const pages = [];
+    let before = undefined;
     while (true) {
-      const msgs = await ch.messages.fetch({ limit: 100 });
+      const opts = { limit: 100 };
+      if (before) opts.before = before;
+      const msgs = await ch.messages.fetch(opts);
       if (msgs.size === 0) break;
+      pages.push(msgs);
+      if (msgs.size < 100) break;
+      before = msgs.last().id;
+    }
 
-      // bulkDelete handles up to 100 at once, filters out >14 day old messages automatically
+    // Delete all pages in parallel
+    await Promise.all(pages.map(async msgs => {
       if (msgs.size >= 2) {
         const result = await ch.bulkDelete(msgs, true).catch(() => null);
-        const bulkCount = result?.size ?? 0;
-        deleted += bulkCount;
-
-        // Any that bulkDelete couldn't handle (>14 days old) — delete via REST directly
+        deleted += result?.size ?? 0;
+        // Old messages bulkDelete couldn't touch — delete in parallel
         const remaining = msgs.filter(m => !result?.has(m.id));
         await Promise.all(remaining.map(m => m.delete().catch(() => {})));
         deleted += remaining.size;
@@ -40,9 +47,8 @@ async function purgeChannel(guild, channelId) {
         await Promise.all(msgs.map(m => m.delete().catch(() => {})));
         deleted += msgs.size;
       }
+    }));
 
-      if (msgs.size < 100) break;
-    }
     return deleted;
   } catch (err) {
     console.error('⚠️ purgeChannel error:', err.message);
@@ -54,21 +60,23 @@ async function purgeChannel(guild, channelId) {
 async function stripRoles(guild, playerIds, roleIds) {
   if (!playerIds.length || !roleIds.length) return;
 
+  const roleIdSet = new Set(roleIds.map(String));
+
   // Fetch all members in one bulk call
   let members = new Map();
   try {
     const fetched = await guild.members.fetch({ user: playerIds });
     members = fetched;
   } catch {
-    // Fallback: fetch in parallel
     const results = await Promise.allSettled(playerIds.map(id => guild.members.fetch(id)));
     results.forEach(r => { if (r.status === 'fulfilled') members.set(r.value.id, r.value); });
   }
 
-  // Remove all roles from all members simultaneously
-  await Promise.allSettled([...members.values()].map(member =>
-    Promise.allSettled(roleIds.map(roleId => member.roles.remove(roleId).catch(() => {})))
-  ));
+  // ONE API call per member: set their roles to current roles minus the ones we're stripping
+  await Promise.allSettled([...members.values()].map(member => {
+    const keptRoles = member.roles.cache.filter(r => !roleIdSet.has(r.id)).map(r => r.id);
+    return member.roles.set(keptRoles).catch(() => {});
+  }));
 }
 
 // ── Helper: post fresh empty slot list in a lobby channel ─────────────────────
@@ -80,20 +88,14 @@ async function postFreshLobbySlotList(guild, letter, lobbyConf, settings, sessio
     const botId  = guild.client?.user?.id;
     const msgKey = `lobby_${letter}`;
 
-    // Delete ALL bot slot list messages for this lobby
+    // Delete any remaining bot slotlist messages in parallel
     const msgs = await ch.messages.fetch({ limit: 50 });
     const toDelete = msgs.filter(m =>
       m.author.id === botId &&
       m.embeds?.[0]?.title?.includes(`Lobby ${letter}`)
     );
-    for (const [, m] of toDelete) {
-      try { await m.delete(); } catch {}
-    }
-
-    // Also nuke by stored ID
-    const ids = getPersistentSlotListId(guild.id, sessionId);
-    if (ids[msgKey]) {
-      try { const old = await ch.messages.fetch(ids[msgKey]); await old.delete(); } catch {}
+    if (toDelete.size > 0) {
+      await Promise.all(toDelete.map(m => m.delete().catch(() => {})));
     }
 
     const embed = buildPersistentSlotList([], settings, letter);
@@ -290,15 +292,16 @@ const clearCmd = {
         .addOptions(sessionOptions)
     );
 
-    await interaction.reply({
+    const replyMsg = await interaction.reply({
       content: '**Step 1 — Select a session:**',
       components: [sessionMenu],
       flags: 64,
+      fetchReply: true,
     });
 
     let sessionPick;
     try {
-      sessionPick = await interaction.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
+      sessionPick = await replyMsg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
     } catch {
       return interaction.editReply({ content: 'Timed out.', components: [] });
     }
@@ -331,13 +334,12 @@ const clearCmd = {
 
     let targetPick;
     try {
-      targetPick = await interaction.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
+      targetPick = await replyMsg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
     } catch {
       return interaction.editReply({ content: 'Timed out.', components: [] });
     }
 
     const target = targetPick.values[0];
-    // Acknowledge the dropdown immediately — then use interaction.editReply for the final result
     await targetPick.deferUpdate();
     await interaction.editReply({ content: `⏳ Clearing **${sessionName}**...`, components: [], embeds: [] });
 
@@ -357,30 +359,34 @@ const clearCmd = {
       const allPlayerIds = [...new Set(
         allTeams.flatMap(team => [team.captain_id, ...(team.players || [])]).filter(Boolean)
       )];
-      await stripRoles(interaction.guild, allPlayerIds, roleIds);
 
+      // Flush DB state immediately (sync, instant)
       clearRegistrations(interaction.guildId, sessionId);
       clearMatches(interaction.guildId, sessionId);
       setSessionServer(interaction.guildId, sessionId, { registration_open: false });
       setSlotListIds(interaction.guildId, {}, sessionId);
 
-      if (sessionCfg.spreadsheet_id) {
-        try { await clearTeamsFromSheet(sessionCfg.spreadsheet_id, settings.slots_per_lobby || 24, null); } catch (e) { console.error('Sheet clear error:', e.message); }
-      }
-
-      // Purge all channels in parallel
-      const [regDeleted, slotDeleted, ...lobbyDeletedArr] = await Promise.all([
+      // Everything in parallel — roles, channels, sheet, slotlists all at once
+      const [, regDeleted, slotDeleted, ...lobbyResults] = await Promise.all([
+        // 1. Strip all roles
+        stripRoles(interaction.guild, allPlayerIds, roleIds),
+        // 2. Purge registration channel
         purgeChannel(interaction.guild, sessionCfg.register_channel),
+        // 3. Purge slot allocation channel
         purgeChannel(interaction.guild, sessionCfg.slotlist_channel),
-        ...lobbyLetters.map(l => lobbyConf[l]?.channel_id
-          ? purgeChannel(interaction.guild, lobbyConf[l].channel_id)
-          : Promise.resolve(0)
-        ),
+        // 4. Purge + repost each lobby channel simultaneously
+        ...lobbyLetters.map(async l => {
+          const count = lobbyConf[l]?.channel_id
+            ? await purgeChannel(interaction.guild, lobbyConf[l].channel_id)
+            : 0;
+          await postFreshLobbySlotList(interaction.guild, l, lobbyConf, settings, sessionId);
+          return count;
+        }),
+        // 5. Clear sheet
+        sessionCfg.spreadsheet_id
+          ? clearTeamsFromSheet(sessionCfg.spreadsheet_id, settings.slots_per_lobby || 24, null).catch(e => console.error('Sheet clear error:', e.message))
+          : Promise.resolve(),
       ]);
-
-      for (const l of lobbyLetters) {
-        await postFreshLobbySlotList(interaction.guild, l, lobbyConf, settings, sessionId);
-      }
 
       return interaction.editReply({
         content: '',
@@ -406,21 +412,21 @@ const clearCmd = {
       const removed = data.slots.filter(t => t.lobby === letter);
       data.slots    = data.slots.filter(t => t.lobby !== letter);
       setRegistrations(interaction.guildId, data, sessionId);
-
-      if (lc?.role_id) {
-        const lobbyPlayerIds = [...new Set(
-          removed.flatMap(team => [team.captain_id, ...(team.players || [])]).filter(Boolean)
-        )];
-        await stripRoles(interaction.guild, lobbyPlayerIds, [lc.role_id]);
-      }
-
-      if (sessionCfg.spreadsheet_id) {
-        try { await clearTeamsFromSheet(sessionCfg.spreadsheet_id, settings.slots_per_lobby || 24, [letter]); } catch (e) { console.error('Sheet clear error:', e.message); }
-      }
-
-      const lobbyDeleted = lc?.channel_id ? await purgeChannel(interaction.guild, lc.channel_id) : 0;
       setSlotListIds(interaction.guildId, { [`lobby_${letter}`]: null }, sessionId);
-      await postFreshLobbySlotList(interaction.guild, letter, lobbyConf, settings, sessionId);
+
+      const lobbyPlayerIds = [...new Set(
+        removed.flatMap(team => [team.captain_id, ...(team.players || [])]).filter(Boolean)
+      )];
+
+      // All in parallel
+      const [, lobbyDeleted] = await Promise.all([
+        lc?.role_id ? stripRoles(interaction.guild, lobbyPlayerIds, [lc.role_id]) : Promise.resolve(),
+        lc?.channel_id ? purgeChannel(interaction.guild, lc.channel_id) : Promise.resolve(0),
+        sessionCfg.spreadsheet_id
+          ? clearTeamsFromSheet(sessionCfg.spreadsheet_id, settings.slots_per_lobby || 24, [letter]).catch(e => console.error('Sheet clear error:', e.message))
+          : Promise.resolve(),
+        postFreshLobbySlotList(interaction.guild, letter, lobbyConf, settings, sessionId),
+      ]);
 
       return interaction.editReply({
         content: '',
@@ -428,7 +434,7 @@ const clearCmd = {
           .setColor(0xFFAA00).setTitle(`🏟️ CLEARED — ${sessionName} — LOBBY ${letter}`)
           .setDescription(
             `✅ **${removed.length}** teams unassigned from Lobby ${letter}\n` +
-            `🧹 Lobby channel: **${lobbyDeleted}** messages deleted\n` +
+            `🧹 Lobby channel: **${lobbyDeleted ?? 0}** messages deleted\n` +
             `📋 Fresh slot list posted in Lobby ${letter} channel\n` +
             `🎭 Lobby ${letter} role stripped\n` +
             `📊 Sheet: Lobby ${letter} tab data cleared`
