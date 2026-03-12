@@ -290,16 +290,15 @@ const clearCmd = {
         .addOptions(sessionOptions)
     );
 
-    const msg = await interaction.reply({
+    await interaction.reply({
       content: '**Step 1 — Select a session:**',
       components: [sessionMenu],
       flags: 64,
-      withResponse: true,
     });
 
     let sessionPick;
     try {
-      sessionPick = await msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
+      sessionPick = await interaction.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
     } catch {
       return interaction.editReply({ content: 'Timed out.', components: [] });
     }
@@ -332,13 +331,15 @@ const clearCmd = {
 
     let targetPick;
     try {
-      targetPick = await msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
+      targetPick = await interaction.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 60_000 });
     } catch {
       return interaction.editReply({ content: 'Timed out.', components: [] });
     }
 
     const target = targetPick.values[0];
-    await targetPick.update({ content: `⏳ Clearing **${sessionName}**...`, components: [] });
+    // Acknowledge the dropdown immediately — then use interaction.editReply for the final result
+    await targetPick.deferUpdate();
+    await interaction.editReply({ content: `⏳ Clearing **${sessionName}**...`, components: [], embeds: [] });
 
     // ── Load session data ─────────────────────────────────────────────────
     const config     = getConfig(interaction.guildId);
