@@ -13,39 +13,32 @@ const {
   setPersistentSlotListId,
 } = require('../../handlers/reactionHandler');
 
-// ── Helper: bulk delete messages in a channel ─────────────────────────────────
+// ── Helper: purge all messages from a channel, no delays ──────────────────────
 async function purgeChannel(guild, channelId) {
   if (!channelId) return 0;
   try {
     const ch = await guild.channels.fetch(channelId);
     if (!ch?.isTextBased()) return 0;
     let deleted = 0;
-    const cutoff = Date.now() - 13 * 24 * 60 * 60 * 1000; // 13 days to stay safe under 14-day limit
 
+    // Keep fetching and bulk-deleting until channel is empty
     while (true) {
       const msgs = await ch.messages.fetch({ limit: 100 });
       if (msgs.size === 0) break;
 
-      const recent = msgs.filter(m => m.createdTimestamp > cutoff);
-      const old    = msgs.filter(m => m.createdTimestamp <= cutoff);
+      // bulkDelete handles up to 100 at once, filters out >14 day old messages automatically
+      if (msgs.size >= 2) {
+        const result = await ch.bulkDelete(msgs, true).catch(() => null);
+        const bulkCount = result?.size ?? 0;
+        deleted += bulkCount;
 
-      // Bulk delete recent messages in one API call
-      if (recent.size >= 2) {
-        const result = await ch.bulkDelete(recent, true).catch(e => {
-          console.error('bulkDelete error:', e.message);
-          return null;
-        });
-        deleted += result?.size ?? 0;
-      } else if (recent.size === 1) {
-        await recent.first().delete().catch(() => {});
-        deleted++;
-      }
-
-      // Individually delete old messages with small delay to avoid rate limit
-      for (const [, msg] of old) {
-        await msg.delete().catch(() => {});
-        deleted++;
-        await new Promise(r => setTimeout(r, 500));
+        // Any that bulkDelete couldn't handle (>14 days old) — delete via REST directly
+        const remaining = msgs.filter(m => !result?.has(m.id));
+        await Promise.all(remaining.map(m => m.delete().catch(() => {})));
+        deleted += remaining.size;
+      } else {
+        await Promise.all(msgs.map(m => m.delete().catch(() => {})));
+        deleted += msgs.size;
       }
 
       if (msgs.size < 100) break;
@@ -55,6 +48,27 @@ async function purgeChannel(guild, channelId) {
     console.error('⚠️ purgeChannel error:', err.message);
     return 0;
   }
+}
+
+// ── Helper: strip roles from all players in parallel, no delays ───────────────
+async function stripRoles(guild, playerIds, roleIds) {
+  if (!playerIds.length || !roleIds.length) return;
+
+  // Fetch all members in one bulk call
+  let members = new Map();
+  try {
+    const fetched = await guild.members.fetch({ user: playerIds });
+    members = fetched;
+  } catch {
+    // Fallback: fetch in parallel
+    const results = await Promise.allSettled(playerIds.map(id => guild.members.fetch(id)));
+    results.forEach(r => { if (r.status === 'fulfilled') members.set(r.value.id, r.value); });
+  }
+
+  // Remove all roles from all members simultaneously
+  await Promise.allSettled([...members.values()].map(member =>
+    Promise.allSettled(roleIds.map(roleId => member.roles.remove(roleId).catch(() => {})))
+  ));
 }
 
 // ── Helper: post fresh empty slot list in a lobby channel ─────────────────────
@@ -97,14 +111,14 @@ const notifyCmd = {
     .setDescription('Notify all registered teams (Admin only)')
     .addStringOption(opt => opt.setName('message').setDescription('Message to send').setRequired(true)),
   async execute(interaction) {
-    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
-    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], flags: 64 });
+    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], flags: 64 });
 
     const msg     = interaction.options.getString('message');
     const config  = getConfig(interaction.guildId);
     const data    = getRegistrations(interaction.guildId);
     const all     = [...data.slots, ...data.waitlist];
-    if (all.length === 0) return interaction.reply({ embeds: [errorEmbed('No Teams', 'No registered teams.')], ephemeral: true });
+    if (all.length === 0) return interaction.reply({ embeds: [errorEmbed('No Teams', 'No registered teams.')], flags: 64 });
 
     const mention = config.registered_role ? `<@&${config.registered_role}>` : '@everyone';
     const channel = config.register_channel
@@ -112,7 +126,7 @@ const notifyCmd = {
       : interaction.channel;
     if (channel) await channel.send({ content: `${mention}\n📣 **ADMIN NOTICE:** ${msg}` });
 
-    return interaction.reply({ embeds: [successEmbed('Notification Sent', `Sent to ${all.length} registered teams.`)], ephemeral: true });
+    return interaction.reply({ embeds: [successEmbed('Notification Sent', `Sent to ${all.length} registered teams.`)], flags: 64 });
   },
 };
 
@@ -122,11 +136,11 @@ const sheetCmd = {
     .setName('sheet')
     .setDescription('Push all registered teams to Google Sheet (Admin only)'),
   async execute(interaction) {
-    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
-    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], flags: 64 });
+    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], flags: 64 });
 
     // Defer immediately before any async work
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 64 });
 
     try {
       const sessions = getSessions(interaction.guildId);
@@ -175,10 +189,10 @@ const linkCmd = {
     .setName('link')
     .setDescription('Get (or auto-generate) Google Sheets for all sessions (Admin only)'),
   async execute(interaction) {
-    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
-    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], flags: 64 });
+    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], flags: 64 });
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 64 });
 
     const sessions = getSessions(interaction.guildId);
     if (sessions.length === 0) {
@@ -255,12 +269,12 @@ const clearCmd = {
     .setDescription('Clear registrations and reset channels (Admin only)'),
 
   async execute(interaction) {
-    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], ephemeral: true });
-    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+    if (!isActivated(interaction.guildId)) return interaction.reply({ embeds: [errorEmbed('Not Activated', 'Run `/activate` first.')], flags: 64 });
+    if (!await isAdmin(interaction))       return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], flags: 64 });
 
     const sessions = getSessions(interaction.guildId);
     if (sessions.length === 0) {
-      return interaction.reply({ embeds: [errorEmbed('No Sessions', 'No sessions configured. Use `/config` to create sessions.')], ephemeral: true });
+      return interaction.reply({ embeds: [errorEmbed('No Sessions', 'No sessions configured. Use `/config` to create sessions.')], flags: 64 });
     }
 
     // ── Step 1: Pick session ──────────────────────────────────────────────
@@ -279,8 +293,8 @@ const clearCmd = {
     const msg = await interaction.reply({
       content: '**Step 1 — Select a session:**',
       components: [sessionMenu],
-      ephemeral: true,
-      fetchReply: true,
+      flags: 64,
+      withResponse: true,
     });
 
     let sessionPick;
@@ -339,16 +353,10 @@ const clearCmd = {
       const roleIds = [config.slot_role, config.waitlist_role, config.registered_role].filter(Boolean);
       for (const l of lobbyLetters) if (lobbyConf[l]?.role_id) roleIds.push(lobbyConf[l].role_id);
 
-      // Strip roles in parallel — no await chain per player
       const allPlayerIds = [...new Set(
         allTeams.flatMap(team => [team.captain_id, ...(team.players || [])]).filter(Boolean)
       )];
-      await Promise.allSettled(allPlayerIds.map(async pid => {
-        try {
-          const m = await interaction.guild.members.fetch(pid);
-          await Promise.allSettled(roleIds.map(r => m.roles.remove(r)));
-        } catch {}
-      }));
+      await stripRoles(interaction.guild, allPlayerIds, roleIds);
 
       clearRegistrations(interaction.guildId, sessionId);
       clearMatches(interaction.guildId, sessionId);
@@ -402,12 +410,7 @@ const clearCmd = {
         const lobbyPlayerIds = [...new Set(
           removed.flatMap(team => [team.captain_id, ...(team.players || [])]).filter(Boolean)
         )];
-        await Promise.allSettled(lobbyPlayerIds.map(async pid => {
-          try {
-            const m = await interaction.guild.members.fetch(pid);
-            await m.roles.remove(lc.role_id);
-          } catch {}
-        }));
+        await stripRoles(interaction.guild, lobbyPlayerIds, [lc.role_id]);
       }
 
       if (sessionCfg.spreadsheet_id) {
@@ -442,7 +445,7 @@ const deactivateCmd = {
     .setName('deactivate')
     .setDescription('Deactivate the scrim bot (Admin only)'),
   async execute(interaction) {
-    if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], ephemeral: true });
+    if (!await isAdmin(interaction)) return interaction.reply({ embeds: [errorEmbed('Access Denied', 'Admin only.')], flags: 64 });
     setServer(interaction.guildId, { active: false });
     return interaction.reply({ embeds: [errorEmbed('Bot Deactivated', 'Scrim bot is now inactive. Run `/activate` to re-enable.')] });
   },
