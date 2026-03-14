@@ -120,19 +120,27 @@ function buildSessionEmbed(config, settings, lobbyConf, session) {
 
 function buildGlobalConfigEmbed(config) {
   const ro = id => id ? `<@&${id}>` : '`Not Set`';
+  const ch = id => id ? `<#${id}>` : '`Not Set`';
   return new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle('⚙️ Global Config (Shared across sessions)')
-    .addFields({
-      name: '🎭 Roles',
-      value: [
-        `👑 Admin: ${ro(config.admin_role)}`,
-        `📝 Registration: ${ro(config.registration_role)}`,
-        `✅ Registered: ${ro(config.registered_role)}`,
-        `🎯 Slot Holder: ${ro(config.slot_role)}`,
-        `⏳ Waitlist: ${ro(config.waitlist_role)}`,
-      ].join('\n'), inline: false,
-    })
+    .addFields(
+      {
+        name: '🎭 Roles',
+        value: [
+          `👑 Admin: ${ro(config.admin_role)}`,
+          `📝 Registration: ${ro(config.registration_role)}`,
+          `✅ Registered: ${ro(config.registered_role)}`,
+          `🎯 Slot Holder: ${ro(config.slot_role)}`,
+          `⏳ Waitlist: ${ro(config.waitlist_role)}`,
+        ].join('\n'), inline: false,
+      },
+      {
+        name: '📋 Log Channel',
+        value: ch(config.log_channel),
+        inline: false,
+      }
+    )
     .setTimestamp();
 }
 
@@ -238,8 +246,11 @@ module.exports = {
           new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder()
               .setCustomId('config_global_role')
-              .setPlaceholder('Select role to configure')
-              .addOptions(Object.entries(GLOBAL_ROLE_FIELDS).map(([k, v]) => ({ label: v, value: k })))
+              .setPlaceholder('Select setting to configure')
+              .addOptions([
+                ...Object.entries(GLOBAL_ROLE_FIELDS).map(([k, v]) => ({ label: v, value: k })),
+                { label: '📋 Log Channel', value: 'log_channel', description: 'Channel for audit logs' },
+              ])
           ),
           buildBackRow(),
         ]});
@@ -255,6 +266,32 @@ module.exports = {
         }
 
         const roleField = j.values[0];
+
+        // ── Log Channel — channel picker ──────────────────────────────────
+        if (roleField === 'log_channel') {
+          await j.update({ embeds: [buildGlobalConfigEmbed(freshConfig())], components: [
+            new ActionRowBuilder().addComponents(
+              new ChannelSelectMenuBuilder()
+                .setCustomId('pick_log_channel')
+                .setPlaceholder('Select log channel')
+                .addChannelTypes(ChannelType.GuildText)
+            ),
+            buildBackRow(),
+          ]});
+
+          let k;
+          try { k = await msg.awaitMessageComponent({ filter: x => x.user.id === interaction.user.id, time: 120_000 }); }
+          catch { try { await msg.edit({ components: [] }); } catch {} return; }
+
+          if (k.customId !== 'config_back') {
+            setConfig(guildId, { log_channel: k.values[0] });
+          }
+          const s2 = freshSessions();
+          await k.update({ embeds: [buildSessionListEmbed(s2)], components: [buildMainMenu(s2)] });
+          continue;
+        }
+
+        // ── Role fields ───────────────────────────────────────────────────
         await j.update({ embeds: [buildGlobalConfigEmbed(freshConfig())], components: [
           new ActionRowBuilder().addComponents(
             new RoleSelectMenuBuilder().setCustomId('pick_global_role').setPlaceholder(`Select ${GLOBAL_ROLE_FIELDS[roleField]}`)
@@ -271,8 +308,11 @@ module.exports = {
             new ActionRowBuilder().addComponents(
               new StringSelectMenuBuilder()
                 .setCustomId('config_global_role')
-                .setPlaceholder('Select role to configure')
-                .addOptions(Object.entries(GLOBAL_ROLE_FIELDS).map(([k2, v]) => ({ label: v, value: k2 })))
+                .setPlaceholder('Select setting to configure')
+                .addOptions([
+                  ...Object.entries(GLOBAL_ROLE_FIELDS).map(([k2, v]) => ({ label: v, value: k2 })),
+                  { label: '📋 Log Channel', value: 'log_channel', description: 'Channel for audit logs' },
+                ])
             ),
             buildBackRow(),
           ]});
