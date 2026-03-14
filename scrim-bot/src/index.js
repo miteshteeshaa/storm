@@ -4,6 +4,7 @@ const { loadCommands, deployCommands } = require('./handlers/commandHandler');
 const interactionHandler = require('./handlers/interactionHandler');
 const { handleReactionAdd, handleReactionRemove } = require('./handlers/reactionHandler');
 const { handleMatchResultMessage } = require('./handlers/matchResultHandler');
+const { handleScrimTimeMessage, startScrimTimerChecker } = require('./handlers/scrimTimerHandler');
 const { getConfig, getRegistrations, getScrimSettings } = require('./utils/database');
 const { setTeamCard, getTeamCards } = require('./utils/database');
 const http = require('http');
@@ -104,6 +105,9 @@ client.once('ready', async () => {
 
   // Rebuild team card map from existing Discord messages (survives restarts)
   await rebuildTeamCards(client);
+
+  // Start scrim timer background checker
+  startScrimTimerChecker(client);
 });
 
 // ─── Slash commands & components ──────────────────────────────────────────────
@@ -111,6 +115,9 @@ client.on('interactionCreate', (interaction) => interactionHandler(client, inter
 
 // ─── Match result screenshots ─────────────────────────────────────────────────
 client.on('messageCreate', (message) => handleMatchResultMessage(message));
+
+// ─── Scrim time detection (ID @ HH:MM in lobby channels) ──────────────────────
+client.on('messageCreate', (message) => handleScrimTimeMessage(message, client));
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
 client.on('messageReactionAdd',    (reaction, user) => handleReactionAdd(reaction, user));
