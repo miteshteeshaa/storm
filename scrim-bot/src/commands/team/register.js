@@ -23,7 +23,7 @@ module.exports = {
   async execute(interaction) {
     try {
       if (!isActivated(interaction.guildId))
-        return interaction.reply({ embeds: [errorEmbed('Bot Not Active', 'The scrim bot is not active.')], ephemeral: true });
+        return interaction.reply({ embeds: [errorEmbed('Bot Not Active', 'The scrim bot is not active.')], flags: 64 });
 
       const config    = getConfig(interaction.guildId);
       const adminUser = await isAdmin(interaction);
@@ -41,7 +41,7 @@ module.exports = {
         const hint = regChannels
           ? `Please use one of the registration channels: ${regChannels}`
           : 'No registration channels have been configured yet. Ask an admin to set up sessions.';
-        return interaction.reply({ embeds: [errorEmbed('Wrong Channel', hint)], ephemeral: true });
+        return interaction.reply({ embeds: [errorEmbed('Wrong Channel', hint)], flags: 64 });
       }
 
       // Registration open check — admins bypass
@@ -50,7 +50,7 @@ module.exports = {
         const session = sessions.find(s => s.id === sessionId);
         return interaction.reply({
           embeds: [errorEmbed('Registration Closed', `Registration for **${session?.name || sessionId}** is currently closed.`)],
-          ephemeral: true,
+          flags: 64,
         });
       }
 
@@ -94,6 +94,7 @@ module.exports = {
         ? `⏳ **[${teamTag}] ${teamName}** added to waitlist for **${sessionName}**! (#${queueNum}) — Admin will assign your slot.`
         : `✅ **[${teamTag}] ${teamName}** registered for **${sessionName}**! (#${queueNum})`;
       await interaction.reply({ content: confirmText });
+
 
       // Background: roles
       try {
@@ -144,9 +145,9 @@ module.exports = {
       console.error('❌ /register error:', err);
       try {
         if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ embeds: [errorEmbed('Error', err.message)], ephemeral: true });
+          await interaction.followUp({ embeds: [errorEmbed('Error', err.message)], flags: 64 });
         } else {
-          await interaction.reply({ embeds: [errorEmbed('Error', err.message)], ephemeral: true });
+          await interaction.reply({ embeds: [errorEmbed('Error', err.message)], flags: 64 });
         }
       } catch {}
     }
