@@ -1,4 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
+const { auditLog } = require('../utils/auditLog');
 const { syncTeamsToSheet } = require('../utils/sheets');
 const {
   getConfig, getRegistrations, setRegistrations,
@@ -367,6 +368,19 @@ async function handleReactionAdd(reaction, user) {
           : Promise.resolve(),
       ]);
 
+      // Audit log — slot given
+      auditLog(guild, {
+        action:      'SLOT_GIVEN',
+        title:       'Slot Assigned',
+        description: `**[${team.team_tag}] ${team.team_name}** assigned to Lobby **${newLobby}** › Slot **${team.lobby_slot ?? '—'}**`,
+        adminId:     user.id,
+        sessionName: sessionId || 'Default',
+        fields: [
+          { name: 'Team',  value: `[${team.team_tag}] ${team.team_name}`, inline: true },
+          { name: 'Lobby', value: `${newLobby} › Slot ${team.lobby_slot ?? '—'}`,      inline: true },
+        ],
+      }).catch(() => {});
+
       // Background: clean up reactions, roles, sheet
       (async () => {
         try {
@@ -436,6 +450,19 @@ async function handleReactionAdd(reaction, user) {
       delete team.lobby_slot;
       data.slots[cardInfo.teamIndex] = team;
       setRegistrations(guild.id, data, sessionId);
+
+      // Audit log — slot removed
+      auditLog(guild, {
+        action:      'SLOT_REMOVED',
+        title:       'Slot Removed',
+        description: `**[${team.team_tag}] ${team.team_name}** unassigned from Lobby **${oldLobby}**`,
+        adminId:     user.id,
+        sessionName: sessionId || 'Default',
+        fields: [
+          { name: 'Team',      value: `[${team.team_tag}] ${team.team_name}`, inline: true },
+          { name: 'Prev Lobby', value: oldLobby || '—',                        inline: true },
+        ],
+      }).catch(() => {});
 
       // Update embed + slotlist immediately
       await updateTeamCardEmbed(message, team);
@@ -600,6 +627,20 @@ async function handleReactionRemove(reaction, user) {
 
       data.slots[cardInfo.teamIndex] = team;
       setRegistrations(guild.id, data, sessionId);
+
+      // Audit log — slot removed via reaction remove
+      auditLog(guild, {
+        action:      'SLOT_REMOVED',
+        title:       'Slot Removed',
+        description: `**[${team.team_tag}] ${team.team_name}** unassigned from Lobby **${oldLobby}**`,
+        adminId:     user.id,
+        sessionName: sessionId || 'Default',
+        fields: [
+          { name: 'Team',       value: `[${team.team_tag}] ${team.team_name}`, inline: true },
+          { name: 'Prev Lobby', value: oldLobby || '—',                        inline: true },
+        ],
+      }).catch(() => {});
+
       await updateTeamCardEmbed(message, team);
       await refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId);
       await syncSheet(guild, config, data, sessionId);
