@@ -4,19 +4,27 @@
 
 const { google } = require('googleapis');
 
+// ── Singleton auth client — created once, reused for every API call ───────────
+// Creating a new OAuth2 client on every request wastes quota and causes invalid_grant.
+let _authClient = null;
+
 function getAuth() {
-  // Prefer OAuth2 for Sheets/Drive (creates files in your personal Drive)
+  if (_authClient) return _authClient;
+
   const clientId     = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
   if (clientId && clientSecret && refreshToken) {
-    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost');
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'urn:ietf:wg:oauth:2.0:oob');
     oauth2Client.setCredentials({ refresh_token: refreshToken });
-    console.log('--- Using OAuth2 with refresh token');
-    return oauth2Client;
+    oauth2Client.on('tokens', tokens => {
+      if (tokens.access_token) console.log('[sheets] Access token refreshed');
+    });
+    console.log('[sheets] Auth: OAuth2 singleton initialised');
+    _authClient = oauth2Client;
+    return _authClient;
   }
 
-  // Fallback: Service Account (GOOGLE_CREDENTIALS_JSON)
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     let creds;
     try { creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); }
@@ -28,11 +36,32 @@ function getAuth() {
         'https://www.googleapis.com/auth/drive',
       ],
     });
-    console.log('--- Using Service Account auth');
-    return auth;
+    console.log('[sheets] Auth: Service Account singleton initialised');
+    _authClient = auth;
+    return _authClient;
   }
 
   throw new Error('Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN (OAuth2) or GOOGLE_CREDENTIALS_JSON (service account).');
+}
+
+// Reset auth — forces re-init on next call (use if invalid_grant persists)
+function resetAuth() {
+  _authClient = null;
+  console.log('[sheets] Auth client reset');
+}
+
+// Wrap any async sheets call — if invalid_grant fires, reset auth and retry once
+async function withAuthRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err.message?.includes('invalid_grant') || err.response?.data?.error === 'invalid_grant') {
+      console.warn('[sheets] invalid_grant detected — resetting auth and retrying once...');
+      resetAuth();
+      return await fn(); // retry with fresh client
+    }
+    throw err;
+  }
 }
 
 function ordinal(n) {
@@ -848,4 +877,15 @@ async function resizeLobbySheet(spreadsheetId, lobbyLetter, newSlotsPerLobby, nu
   }
 }
 
-module.exports = { createServerSheet, syncTeamsToSheet, clearTeamsFromSheet, getSheetStandings, writeMatchResult, resizeLobbySheet };
+// Wrap all sheet functions with auto-retry on invalid_grant
+const _wrap = fn => async (...args) => withAuthRetry(() => fn(...args));
+
+module.exports = {
+  createServerSheet:  _wrap(createServerSheet),
+  syncTeamsToSheet:   _wrap(syncTeamsToSheet),
+  clearTeamsFromSheet: _wrap(clearTeamsFromSheet),
+  getSheetStandings:  _wrap(getSheetStandings),
+  writeMatchResult:   _wrap(writeMatchResult),
+  resizeLobbySheet:   _wrap(resizeLobbySheet),
+  resetAuth,
+};
