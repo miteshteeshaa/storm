@@ -476,18 +476,28 @@ async function handleReactionAdd(reaction, user) {
   const lobbyConf = getLobbyConfig(guild.id, sessionId);
   const data      = getRegistrations(guild.id, sessionId);
 
-  // Find ALL slots where this user is captain or manager in THIS lobby
+  // Find ALL slots in this lobby where this user is captain, manager, or tagged player
   const teamIndices = data.slots.reduce((acc, t, idx) => {
-    if ((t.captain_id === user.id || t.manager_id === user.id) && t.lobby === session.lobbyLetter) {
-      acc.push(idx);
-    }
+    const isTeamMember = t.captain_id === user.id ||
+                         t.manager_id === user.id ||
+                         (Array.isArray(t.players) && t.players.includes(user.id));
+    if (isTeamMember && t.lobby === session.lobbyLetter) acc.push(idx);
     return acc;
   }, []);
 
   if (teamIndices.length === 0) {
-    // Not a registered captain/manager for this lobby — remove their reaction
+    // Not part of any team in this lobby — remove their reaction
     try { await reaction.users.remove(user.id); } catch {}
     return;
+  }
+
+  // ❌ cancel is restricted to captain only
+  if (emoji === '❌') {
+    const isCaptain = teamIndices.some(idx => data.slots[idx].captain_id === user.id);
+    if (!isCaptain) {
+      try { await reaction.users.remove(user.id); } catch {}
+      return;
+    }
   }
 
   // Always remove the user's reaction immediately — keeps count at 1 (bot only)
