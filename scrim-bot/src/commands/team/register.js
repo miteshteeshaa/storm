@@ -96,16 +96,21 @@ module.exports = {
       await interaction.reply({ content: confirmText });
 
 
-      // Background: roles
+      // Background: roles — apply to all players (captain + tagged teammates)
       try {
-        const member = interaction.member;
-        if (config.registered_role) member.roles.add(config.registered_role).catch(() => {});
-        if (isWaitlist) {
-          if (config.waitlist_role) member.roles.add(config.waitlist_role).catch(() => {});
-        } else {
-          if (config.slot_role)     member.roles.add(config.slot_role).catch(() => {});
-          if (config.waitlist_role) member.roles.remove(config.waitlist_role).catch(() => {});
-        }
+        const allPlayerIds = [...new Set([captainId, ...(team.players || [])])].filter(Boolean);
+        await Promise.allSettled(allPlayerIds.map(async playerId => {
+          try {
+            const member = await interaction.guild.members.fetch(playerId);
+            if (config.registered_role) member.roles.add(config.registered_role).catch(() => {});
+            if (isWaitlist) {
+              if (config.waitlist_role) member.roles.add(config.waitlist_role).catch(() => {});
+            } else {
+              if (config.slot_role)     member.roles.add(config.slot_role).catch(() => {});
+              if (config.waitlist_role) member.roles.remove(config.waitlist_role).catch(() => {});
+            }
+          } catch {}
+        }));
       } catch {}
 
       // Background: sheet sync
