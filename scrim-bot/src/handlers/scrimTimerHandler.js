@@ -63,8 +63,31 @@ async function handleScrimTimeMessage(message, client) {
   const legacyMatch = message.content.match(ID_TIME_REGEX);
 
   const isMatchPost = hasMap && hasId && !!clockMatch;
+  const isIdPost    = !!legacyMatch && !isMatchPost; // ID @ HH:MM format only
   const timeMatch   = clockMatch || legacyMatch;
   if (!timeMatch) return;
+
+  // ── ID post format: repost with timestamp, delete original, tag admin ─────
+  if (isIdPost) {
+    const timeStr   = legacyMatch[1];
+    const unixTs    = mauritiusTimeToUnix(timeStr);
+    // Replace the time in the original content with a Discord timestamp
+    const reposted  = message.content.replace(
+      ID_TIME_REGEX,
+      (full, t) => full.replace(t, `<t:${unixTs}:t>`)
+    );
+    const adminTag  = `<@${message.author.id}>`;
+    try {
+      await message.channel.send({
+        content: `${reposted}\n-# Posted by ${adminTag}`,
+        allowedMentions: { parse: ['roles', 'users'] },
+      });
+      await message.delete().catch(() => {});
+    } catch (err) {
+      console.error('[scrimTimer] ID repost error:', err.message);
+    }
+    return; // no timer needed for ID posts
+  }
 
   // Find which session + lobby letter this channel belongs to
   const sessions = getSessions(guildId);
