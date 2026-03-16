@@ -381,48 +381,54 @@ async function handleReactionAdd(reaction, user) {
         ],
       }).catch(() => {});
 
-      // Background: clean up reactions, roles, sheet
+            // Background: clean up reactions, roles, sheet — run in parallel
       (async () => {
-        try {
-          // ── If slot assigned: show lobby emoji + slot emoji + ❌ ──────────────
-          if (team.lobby_slot) {
-            await message.reactions.removeAll().catch(() => {});
-            // Add assigned lobby letter emoji
-            const lobbyEmojiName = `ALPHABET_${team.lobby}`;
-            const lobbyEmojiId   = LOBBY_EMOJI_IDS[lobbyEmojiName];
-            if (lobbyEmojiId) await message.react(`${lobbyEmojiName}:${lobbyEmojiId}`).catch(() => {});
-            await new Promise(r => setTimeout(r, 200));
-            // Add slot number emoji
-            const slotEmoji = SLOT_EMOJI_LIST[team.lobby_slot - 1];
-            if (slotEmoji) await message.react(`${slotEmoji.name}:${slotEmoji.id}`).catch(() => {});
-            await new Promise(r => setTimeout(r, 200));
-            // Add ❌ to allow unassign
-            await message.react('❌').catch(() => {});
-          } else {
-            // Lobby full — just remove the other lobby letter reactions, keep this one
-            for (const le of LOBBY_EMOJI_LIST.filter(le => le !== emoji)) {
-              const r = message.reactions.cache.find(r => r.emoji.name === le);
-              if (r) await r.users.remove(user.id).catch(() => {});
-            }
-          }
-        } catch {}
+        await Promise.all([
+          // Reaction cleanup
+          (async () => {
+            try {
+              if (team.lobby_slot) {
+                await message.reactions.removeAll().catch(() => {});
+                const lobbyEmojiName = `ALPHABET_${team.lobby}`;
+                const lobbyEmojiId   = LOBBY_EMOJI_IDS[lobbyEmojiName];
+                if (lobbyEmojiId) await message.react(`${lobbyEmojiName}:${lobbyEmojiId}`).catch(() => {});
+                await new Promise(r => setTimeout(r, 100));
+                const slotEmoji = SLOT_EMOJI_LIST[team.lobby_slot - 1];
+                if (slotEmoji) await message.react(`${slotEmoji.name}:${slotEmoji.id}`).catch(() => {});
+                await new Promise(r => setTimeout(r, 100));
+                await message.react('❌').catch(() => {});
+              } else {
+                await Promise.allSettled(
+                  LOBBY_EMOJI_LIST.filter(le => le !== emoji).map(le => {
+                    const r = message.reactions.cache.find(r => r.emoji.name === le);
+                    return r ? r.users.remove(user.id).catch(() => {}) : Promise.resolve();
+                  })
+                );
+              }
+            } catch {}
+          })(),
 
-        // Role management
-        try {
-          if (prevLobby && prevLobby !== newLobby && lobbyConf[prevLobby]?.role_id) {
-            for (const pid of (team.players || [team.manager_id, team.captain_id])) {
-              guild.members.fetch(pid).then(m => m.roles.remove(lobbyConf[prevLobby].role_id)).catch(() => {});
-            }
-          }
-          if (lobbyConf[newLobby]?.role_id) {
-            for (const pid of (team.players || [team.manager_id, team.captain_id])) {
-              guild.members.fetch(pid).then(m => m.roles.add(lobbyConf[newLobby].role_id)).catch(() => {});
-            }
-          }
-        } catch {}
+          // Role management — all players in parallel
+          (async () => {
+            try {
+              const allPlayerIds = [...new Set([team.captain_id, ...(team.players || [])].filter(Boolean))];
+              await Promise.allSettled(allPlayerIds.map(async pid => {
+                try {
+                  const m = await guild.members.fetch(pid);
+                  if (prevLobby && prevLobby !== newLobby && lobbyConf[prevLobby]?.role_id) {
+                    await m.roles.remove(lobbyConf[prevLobby].role_id).catch(() => {});
+                  }
+                  if (lobbyConf[newLobby]?.role_id) await m.roles.add(lobbyConf[newLobby].role_id).catch(() => {});
+                  if (config.waitlist_role) await m.roles.remove(config.waitlist_role).catch(() => {});
+                  if (config.slot_role)     await m.roles.add(config.slot_role).catch(() => {});
+                } catch {}
+              }));
+            } catch {}
+          })(),
 
-        // Sheet sync
-        syncSheet(guild, config, data, sessionId).catch(() => {});
+          // Sheet sync
+          syncSheet(guild, config, data, sessionId).catch(() => {}),
+        ]);
       })();
       return;
     }
@@ -436,15 +442,16 @@ async function handleReactionAdd(reaction, user) {
         return;
       }
 
-      // Remove lobby role from all players
-      if (oldLobby && lobbyConf[oldLobby]?.role_id) {
-        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
-          try {
-            const m = await guild.members.fetch(playerId);
-            await m.roles.remove(lobbyConf[oldLobby].role_id).catch(() => {});
-          } catch {}
-        }
-      }
+      // Remove lobby role + slot_role from all players, restore waitlist_role
+      const allPlayerIds2 = [...new Set([team.captain_id, ...(team.players || [])].filter(Boolean))];
+      await Promise.allSettled(allPlayerIds2.map(async pid => {
+        try {
+          const m = await guild.members.fetch(pid);
+          if (oldLobby && lobbyConf[oldLobby]?.role_id) await m.roles.remove(lobbyConf[oldLobby].role_id).catch(() => {});
+          if (config.slot_role)     await m.roles.remove(config.slot_role).catch(() => {});
+          if (config.waitlist_role) await m.roles.add(config.waitlist_role).catch(() => {});
+        } catch {}
+      }));
 
       delete team.lobby;
       delete team.lobby_slot;
@@ -464,12 +471,14 @@ async function handleReactionAdd(reaction, user) {
         ],
       }).catch(() => {});
 
-      // Update embed + slotlist immediately
-      await updateTeamCardEmbed(message, team);
-      await refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId);
-      await syncSheet(guild, config, data, sessionId);
+      // Update embed + slotlist immediately, restore emojis in background
+      await Promise.all([
+        updateTeamCardEmbed(message, team),
+        refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId),
+        syncSheet(guild, config, data, sessionId),
+      ]);
 
-      // Restore lobby letter emojis
+      // Restore lobby letter emojis — minimal delay between each
       try {
         await message.reactions.removeAll();
         const numLobbies = settings.lobbies || 4;
@@ -477,7 +486,7 @@ async function handleReactionAdd(reaction, user) {
           const name = LOBBY_EMOJI_LIST[idx];
           const id   = LOBBY_EMOJI_IDS[name];
           await message.react(`${name}:${id}`).catch(() => {});
-          await new Promise(r => setTimeout(r, 150));
+          if (idx < numLobbies - 1) await new Promise(r => setTimeout(r, 100));
         }
       } catch {}
       return;
@@ -613,15 +622,16 @@ async function handleReactionRemove(reaction, user) {
     // ── Admin removes ❌ = unassign slot & lobby, restore lobby letter emojis ──
     if (emoji === '❌') {
       const oldLobby = team.lobby;
-      // Remove lobby role from all players
-      if (oldLobby && lobbyConf[oldLobby]?.role_id) {
-        for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
-          try {
-            const m = await guild.members.fetch(playerId);
-            await m.roles.remove(lobbyConf[oldLobby].role_id).catch(() => {});
-          } catch {}
-        }
-      }
+      // Remove lobby role + slot_role, restore waitlist_role — all players in parallel
+      const allPlayerIds3 = [...new Set([team.captain_id, ...(team.players || [])].filter(Boolean))];
+      await Promise.allSettled(allPlayerIds3.map(async pid => {
+        try {
+          const m = await guild.members.fetch(pid);
+          if (oldLobby && lobbyConf[oldLobby]?.role_id) await m.roles.remove(lobbyConf[oldLobby].role_id).catch(() => {});
+          if (config.slot_role)     await m.roles.remove(config.slot_role).catch(() => {});
+          if (config.waitlist_role) await m.roles.add(config.waitlist_role).catch(() => {});
+        } catch {}
+      }));
       delete team.lobby;
       delete team.lobby_slot;
 
@@ -641,11 +651,13 @@ async function handleReactionRemove(reaction, user) {
         ],
       }).catch(() => {});
 
-      await updateTeamCardEmbed(message, team);
-      await refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId);
-      await syncSheet(guild, config, data, sessionId);
+      await Promise.all([
+        updateTeamCardEmbed(message, team),
+        refreshAllSlotLists(guild, config, settings, lobbyConf, data, null, sessionId),
+        syncSheet(guild, config, data, sessionId),
+      ]);
 
-      // Restore lobby letter emojis — remove ❌ then re-add all configured lobby letters
+      // Restore lobby letter emojis — minimal delay between each
       try {
         await message.reactions.removeAll();
         const numLobbies = settings.lobbies || 4;
@@ -653,7 +665,7 @@ async function handleReactionRemove(reaction, user) {
           const name = LOBBY_EMOJI_LIST[idx];
           const id   = LOBBY_EMOJI_IDS[name];
           await message.react(`${name}:${id}`).catch(() => {});
-          await new Promise(r => setTimeout(r, 150));
+          if (idx < numLobbies - 1) await new Promise(r => setTimeout(r, 100));
         }
       } catch {}
       return;
