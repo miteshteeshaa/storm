@@ -1,23 +1,28 @@
 // ── Scrim Timer Handler ───────────────────────────────────────────────────────
-// Watches all lobby channels for "ID @ HH:MM" style messages
+// Watches all lobby channels for match post messages
 // Converts Mauritius time (UTC+4) → Unix timestamp → Discord timestamp
 // Fires reminder DMs 30 mins before to confirmed + unconfirmed teams
-// Lobby role gets pinged in channel 30 mins before
+// Fires countdown pings in slotlist channel starting 5 mins before ID time
 
 const { EmbedBuilder } = require('discord.js');
 const {
   getSessions, getLobbyConfig, getRegistrations,
-  getScrimSettings,
+  getScrimSettings, getSessionConfig,
 } = require('../utils/database');
 
-// ── Matches all ID time variants admin might type ─────────────────────────────
-// ID @ 20:20 / ID: 20:20 / id:20:20 / ID 20:20 / ID@ 20:20 / ID : 20:20
+// ── Regex: existing ID time format (backwards compat) ─────────────────────────
+// ID @ 20:20 / ID: 20:20 / id:20:20 / ID 20:20
 const ID_TIME_REGEX = /\bID\s*[@:]?\s*(\d{1,2}:\d{2})\b/i;
 
-const REMINDER_OFFSET_MS = 30 * 60 * 1000; // 30 minutes fixed
+// ── Regex: match post detection ───────────────────────────────────────────────
+const CLOCK_TIME_REGEX = /⏰\s*:\s*(\d{1,2}:\d{2})/;
+const MATCH_ID_REGEX   = /🆔\s*:/;
+const MAP_NAMES_REGEX  = /\b(ERANGEL|MIRAMAR|SANHOK|VIKENDI|KARAKIN|LIVIK|RONDO|NUSA|METRO|INFANTRY|GOLDEN|BLAZING)\b/i;
+
+const REMINDER_OFFSET_MS  = 30 * 60 * 1000; // 30 minutes
 
 // ── In-memory store ───────────────────────────────────────────────────────────
-// guildId → Map(lobbyLetter → { unixTs, reminderFired, botReplyMessageId, channelId, sessionId, lobbyConf })
+// guildId → Map(lobbyLetter → timerEntry)
 const scrimTimers = new Map();
 
 function getGuildTimers(guildId) {
@@ -37,7 +42,6 @@ function mauritiusTimeToUnix(timeStr) {
     minutes,
     0,
   ));
-  // If more than 2h in the past, assume it's for tomorrow
   if (d.getTime() < Date.now() - 2 * 60 * 60 * 1000) {
     d.setUTCDate(d.getUTCDate() + 1);
   }
@@ -52,8 +56,15 @@ async function handleScrimTimeMessage(message, client) {
   const guildId   = message.guild.id;
   const channelId = message.channel.id;
 
-  const match = message.content.match(ID_TIME_REGEX);
-  if (!match) return;
+  // Detect full match post: must have map name + 🆔 + ⏰ time
+  const hasMap      = MAP_NAMES_REGEX.test(message.content);
+  const hasId       = MATCH_ID_REGEX.test(message.content);
+  const clockMatch  = message.content.match(CLOCK_TIME_REGEX);
+  const legacyMatch = message.content.match(ID_TIME_REGEX);
+
+  const isMatchPost = hasMap && hasId && !!clockMatch;
+  const timeMatch   = clockMatch || legacyMatch;
+  if (!timeMatch) return;
 
   // Find which session + lobby letter this channel belongs to
   const sessions = getSessions(guildId);
@@ -74,9 +85,9 @@ async function handleScrimTimeMessage(message, client) {
     if (foundLobbyLetter) break;
   }
 
-  if (!foundLobbyLetter) return; // not a recognised lobby channel — ignore
+  if (!foundLobbyLetter) return;
 
-  const timeStr  = match[1];
+  const timeStr  = timeMatch[1];
   const unixTs   = mauritiusTimeToUnix(timeStr);
   const nowMs    = Date.now();
   const targetMs = unixTs * 1000;
@@ -92,14 +103,19 @@ async function handleScrimTimeMessage(message, client) {
       `**${scrimName} — Lobby ${foundLobbyLetter}**\n\n` +
       `🕐 ID starts: <t:${unixTs}:F>\n` +
       `⏳ That's <t:${unixTs}:R>\n\n` +
-      `🔔 Reminder DMs will fire **30 minutes before**`
+      `🔔 Reminder DMs will fire **30 minutes before**\n` +
+      `📣 Countdown pings will start **5 minutes before** in the slot list channel`
     )
     .setTimestamp();
 
-  // Edit previous bot reply if we have one, otherwise send fresh
   const timers  = getGuildTimers(guildId);
   const existing = timers.get(foundLobbyLetter);
   let botReplyMessageId = existing?.botReplyMessageId || null;
+
+  // Cancel any active countdown if time was updated
+  if (existing?.countdownInterval) {
+    clearInterval(existing.countdownInterval);
+  }
 
   try {
     if (botReplyMessageId) {
@@ -118,26 +134,66 @@ async function handleScrimTimeMessage(message, client) {
     console.error('[scrimTimer] Reply error:', err.message);
   }
 
-  // ── Store / update timer (always reset reminderFired on time change) ──────
   const timerEntry = {
     unixTs,
-    reminderFired:    false, // reset so reminder fires again at new time
+    reminderFired:       false,
+    countdownFired:      false,
+    lastCountdownPingId: null,  // message ID of the last countdown ping to delete
     botReplyMessageId,
     channelId,
-    sessionId:        foundSessionId,
+    sessionId:           foundSessionId,
     guildId,
-    lobbyLetter:      foundLobbyLetter,
-    lobbyConf:        foundLobbyConf,
+    lobbyLetter:         foundLobbyLetter,
+    lobbyConf:           foundLobbyConf,
+    isMatchPost,
   };
   timers.set(foundLobbyLetter, timerEntry);
 
   const msUntilReminder = targetMs - REMINDER_OFFSET_MS - nowMs;
   console.log(`[scrimTimer] Lobby ${foundLobbyLetter} → ${timeStr} MUT (unix=${unixTs}) reminder in ${Math.round(msUntilReminder / 60000)}min`);
 
-  // If already within 30 min window (but scrim hasn't started), fire immediately
   if (msUntilReminder <= 0 && targetMs > nowMs) {
     console.log(`[scrimTimer] Less than 30min away — firing immediately for Lobby ${foundLobbyLetter}`);
     await fireReminder(client, guildId, foundLobbyLetter, timerEntry);
+  }
+}
+
+// ── Send countdown ping in lobby channel, delete previous ────────────────────
+async function sendCountdownPing(client, guildId, timer, minsLeft) {
+  const { lobbyConf, lobbyLetter } = timer;
+
+  let guild;
+  try { guild = await client.guilds.fetch(guildId); } catch { return; }
+
+  // Use the lobby channel directly
+  const lobbyChId = lobbyConf?.channel_id;
+  if (!lobbyChId) return;
+
+  let ch;
+  try { ch = await guild.channels.fetch(lobbyChId); } catch { return; }
+
+  const roleId      = lobbyConf?.role_id;
+  const roleMention = roleId ? `<@&${roleId}>` : `Lobby ${lobbyLetter}`;
+
+  const content = minsLeft > 0
+    ? `📣 STARTING IN ${String(minsLeft).padStart(2, '0')}MIN ${roleMention}`
+    : `🚨 STARTING NOW ${roleMention}`;
+
+  try {
+    // Delete previous countdown ping
+    if (timer.lastCountdownPingId) {
+      const prev = await ch.messages.fetch(timer.lastCountdownPingId).catch(() => null);
+      if (prev) await prev.delete().catch(() => {});
+      timer.lastCountdownPingId = null;
+    }
+
+    // Only send new ping if still counting down or at 0 (don't ping after start)
+    const sent = await ch.send({ content });
+    timer.lastCountdownPingId = sent.id;
+
+    console.log(`[scrimTimer] Countdown ping Lobby ${lobbyLetter}: ${content}`);
+  } catch (err) {
+    console.error('[scrimTimer] Countdown ping error:', err.message);
   }
 }
 
@@ -161,7 +217,6 @@ async function fireReminder(client, guildId, lobbyLetter, timer) {
   const data      = getRegistrations(guildId, sessionId);
   const scrimName = settings.scrim_name || 'Scrim';
 
-  // Fetch lobby channel
   const lobbyChannelId = lobbyConf?.channel_id;
   let lobbyChannel = null;
   try {
@@ -171,7 +226,7 @@ async function fireReminder(client, guildId, lobbyLetter, timer) {
   const lobbyChannelMention = lobbyChannel ? `<#${lobbyChannelId}>` : `Lobby ${lobbyLetter}`;
   const roleId = lobbyConf?.role_id || null;
 
-  // ── 1. Ping lobby role in the lobby channel ───────────────────────────────
+  // ── 1. Ping lobby role in lobby channel ───────────────────────────────────
   if (lobbyChannel) {
     try {
       const roleMention = roleId ? `<@&${roleId}> ` : '';
@@ -207,7 +262,6 @@ async function fireReminder(client, guildId, lobbyLetter, timer) {
         if (!user) continue;
 
         const dmEmbed = isConfirmed
-          // ── Confirmed team ────────────────────────────────────────────────
           ? new EmbedBuilder()
               .setColor(0x57F287)
               .setTitle('⏰ ID Will Be Sent in 30 Minutes!')
@@ -219,10 +273,9 @@ async function fireReminder(client, guildId, lobbyLetter, timer) {
                 `Be ready! ✅`
               )
               .setTimestamp()
-          // ── Unconfirmed team ──────────────────────────────────────────────
           : new EmbedBuilder()
               .setColor(0xED4245)
-              .setTitle('⚠️ You Haven\'t Confirmed Your Slot!')
+              .setTitle("⚠️ You Haven't Confirmed Your Slot!")
               .setDescription(
                 `**${scrimName}**\n` +
                 `🏟️ Lobby ${lobbyLetter} › Slot **${team.lobby_slot}**\n` +
@@ -253,11 +306,8 @@ function startScrimTimerChecker(client) {
 
     for (const [guildId, lobbyMap] of scrimTimers) {
       for (const [lobbyLetter, timer] of lobbyMap) {
-        if (timer.reminderFired) continue;
-
-        const targetMs        = timer.unixTs * 1000;
-        const msUntilStart    = targetMs - nowMs;
-        const msUntilReminder = msUntilStart - REMINDER_OFFSET_MS;
+        const targetMs     = timer.unixTs * 1000;
+        const msUntilStart = targetMs - nowMs;
 
         // Clean up entries for scrims that started more than 2h ago
         if (msUntilStart < -2 * 60 * 60 * 1000) {
@@ -265,15 +315,34 @@ function startScrimTimerChecker(client) {
           continue;
         }
 
-        // Fire when we hit the 30-min window
-        if (msUntilReminder <= 0 && msUntilStart > 0) {
-          await fireReminder(client, guildId, lobbyLetter, timer).catch(err => {
-            console.error(`[scrimTimer] Reminder error lobby=${lobbyLetter}:`, err.message);
+        // ── 30-min reminder ───────────────────────────────────────────────
+        if (!timer.reminderFired) {
+          const msUntilReminder = msUntilStart - REMINDER_OFFSET_MS;
+          if (msUntilReminder <= 0 && msUntilStart > 0) {
+            await fireReminder(client, guildId, lobbyLetter, timer).catch(err => {
+              console.error(`[scrimTimer] Reminder error lobby=${lobbyLetter}:`, err.message);
+            });
+          }
+        }
+
+        // ── Countdown pings (only for match post format) ──────────────────
+        // Only trigger if the message was detected as a full match post
+        if (!timer.isMatchPost) continue;
+        if (timer.countdownFired) continue; // already finished
+
+        const minsUntilStart = Math.ceil(msUntilStart / 60000);
+
+        // Ping every minute from when admin posts until STARTING NOW
+        if (msUntilStart > -60000) {
+          const minsLeft = Math.max(0, minsUntilStart);
+          await sendCountdownPing(client, guildId, timer, minsLeft).catch(err => {
+            console.error(`[scrimTimer] Countdown error lobby=${lobbyLetter}:`, err.message);
           });
+          if (minsLeft === 0) timer.countdownFired = true; // stop after STARTING NOW
         }
       }
     }
-  }, 60 * 1000); // check every 60 seconds
+  }, 60 * 1000);
 
   console.log('⏰ Scrim timer checker started');
 }
