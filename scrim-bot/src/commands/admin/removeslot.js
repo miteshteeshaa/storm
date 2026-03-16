@@ -73,15 +73,19 @@ module.exports = {
 
     await interaction.deferReply({ ephemeral: true });
 
-    // Remove lobby role from all players
+    // Remove lobby role + slot_role, restore waitlist_role — all players in parallel
     const lc = lobbyConf[lobby];
-    if (lc?.role_id) {
-      for (const playerId of (team.players || [team.manager_id, team.captain_id])) {
+    const allPlayerIds = [...new Set([team.captain_id, ...(team.players || [])].filter(Boolean))];
+
+    if (allPlayerIds.length) {
+      await Promise.allSettled(allPlayerIds.map(async playerId => {
         try {
           const member = await interaction.guild.members.fetch(playerId);
-          await member.roles.remove(lc.role_id).catch(() => {});
+          if (lc?.role_id)          await member.roles.remove(lc.role_id).catch(() => {});
+          if (config.slot_role)     await member.roles.remove(config.slot_role).catch(() => {});
+          if (config.waitlist_role) await member.roles.add(config.waitlist_role).catch(() => {});
         } catch {}
-      }
+      }));
     }
 
     // Clear slot assignment (keep team in slots list as unassigned)
