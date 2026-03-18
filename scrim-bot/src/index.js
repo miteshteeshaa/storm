@@ -10,7 +10,6 @@ const { setTeamCard, getTeamCards } = require('./utils/database');
 const http = require('http');
 
 // ── Rebuild team card map on startup ─────────────────────────────────────────
-// Scans slotlist channel for bot messages and matches them to registered teams
 async function rebuildTeamCards(client) {
   for (const [guildId, guild] of client.guilds.cache) {
     try {
@@ -21,7 +20,6 @@ async function rebuildTeamCards(client) {
       const channel = await guild.channels.fetch(config.slotlist_channel).catch(() => null);
       if (!channel) continue;
 
-      // Fetch up to 100 recent messages in the slotlist channel
       const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
       if (!messages) continue;
 
@@ -33,7 +31,6 @@ async function rebuildTeamCards(client) {
         const embed = msg.embeds?.[0];
         if (!embed?.title) continue;
 
-        // Match embed title "[TAG] Team Name" to a registered team
         const teamIndex = data.slots.findIndex(t => {
           const expected = `[${t.team_tag}] ${t.team_name}`;
           return embed.title === expected;
@@ -82,13 +79,13 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions, // ← needed for ✅ ❌ reactions
+    GatewayIntentBits.GuildMessageReactions,
   ],
   partials: [
     Partials.Message,
     Partials.Channel,
     Partials.GuildMember,
-    Partials.Reaction, // ← needed to catch reactions on older messages
+    Partials.Reaction,
   ],
 });
 
@@ -103,10 +100,8 @@ client.once('ready', async () => {
   await loadCommands(client);
   await deployCommands(client);
 
-  // Rebuild team card map from existing Discord messages (survives restarts)
   await rebuildTeamCards(client);
 
-  // Start scrim timer background checker
   startScrimTimerChecker(client);
 });
 
@@ -116,8 +111,14 @@ client.on('interactionCreate', (interaction) => interactionHandler(client, inter
 // ─── Match result screenshots ─────────────────────────────────────────────────
 client.on('messageCreate', (message) => handleMatchResultMessage(message));
 
-// ─── Scrim time detection (ID @ HH:MM in lobby channels) ──────────────────────
+// ─── Scrim time detection (new messages) ──────────────────────────────────────
 client.on('messageCreate', (message) => handleScrimTimeMessage(message, client));
+
+// ─── Scrim time detection (edited messages) ───────────────────────────────────
+client.on('messageUpdate', (oldMessage, newMessage) => {
+  if (!newMessage.content) return;
+  handleScrimTimeMessage(newMessage, client);
+});
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
 client.on('messageReactionAdd',    (reaction, user) => handleReactionAdd(reaction, user));
@@ -152,7 +153,7 @@ async function autoSyncAllGuilds() {
 
 setInterval(() => {
   autoSyncAllGuilds().catch(err => console.error('⚠️ Auto-sync interval error:', err.message));
-}, 20 * 60 * 1000); // every 20 minutes
+}, 20 * 60 * 1000);
 
 // ─── Login ────────────────────────────────────────────────────────────────────
 console.log('🔑 Attempting Discord login...');
